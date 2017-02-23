@@ -3,7 +3,7 @@ Utilities for Handling of S-Expression Lisp/Scheme-Like forms and parsing of KIF
 
 ```prolog
 
-:- pack_install('https://github.com/TeamSPoon/pack_s_expression.git').
+:- pack_install('https://github.com/TeamSPoon/s_expression.git').
 
 
 :- use_module(library(sexpr_reader)).
