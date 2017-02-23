@@ -17,15 +17,9 @@
   lisp_read_from_stream/2,
   parse_sexpr/2]).
 
-:- set_module(class(library)).
-
 
  :- meta_predicate with_lisp_translation(+,1),input_to_forms_debug(+,2).
  :- meta_predicate see_seen(0).
- :- meta_predicate sexpr_vector(*,//,?,?).
- :- meta_predicate phrase_from_stream_part(//,*).
- :- meta_predicate read_string_until(*,//,?,?).
-
 
 see_seen(_):-!.
 see_seen(G):-call(G).
@@ -267,7 +261,9 @@ input_to_forms_debug(String,Decoder):-input_to_forms(String,Wff,Vs),
 %
 % Get Input Converted To Forms.
 %
-input_to_forms(Codes,FormsOut,Vars):- 
+
+
+input_to_forms(Codes,FormsOut,Vars):-
   b_setval('$variable_names',[]),
   input_to_forms0(Codes,FormsOut,Vars),!.
 
@@ -309,8 +305,7 @@ writeqnl(O):-writeq(O),nl.
 % tstl(I):- with_lisp_translation(I,([O]>>(writeq(O),nl))).
 tstl(I):- with_lisp_translation(I,writeqnl).
 
-phrase_from_stream_part(Grammar, In) :- at_end_of_stream(In),!,
-  (Grammar=end_of_file;term_variables(In,[end_of_file|_]);throw(at_end_of_stream(In))).
+phrase_from_stream_part(Grammar, In) :- at_end_of_stream(In),!,(Grammar=end_of_file;term_variables(In,[end_of_file|_]);throw(at_end_of_stream(In))).
 phrase_from_stream_part(Grammar, In) :-   
      seek(In, 0, current, Prev),
      stream_to_lazy_list(In, List),
@@ -320,18 +315,6 @@ phrase_from_stream_part(Grammar, In) :-
      Offset is Used - UnUsed + Prev,
      % dmsg((Offset is Used - UnUsed + Prev)),
      seek(In,Offset,bof,NewPos),!.
-
-
-/* alternate method*/
-phrase_from_stream_partial(Grammar, In):-
-  phrase_from_stream((Grammar,!,lazy_forgotten(In)), In).
-
-lazy_forgotten(In,UnUsed,UnUsed):- 
-  (is_list(UnUsed)-> true ; append(UnUsed,[],UnUsed)),
-  length(UnUsed,PlzUnread),
-  seek(In, -PlzUnread, current, _).
-
- 
 
 %= 	 	 
 
@@ -361,7 +344,7 @@ txt_to_codes(Text,Codes):- catch((text_to_string(Text,String),string_codes(Strin
 %
 % Parse S-expression Codes.
 %
-parse_sexpr_ascii(S, Expr) :- is_stream(S),!,phrase_from_stream_part(file_sexpr(Expr),S).
+parse_sexpr_ascii(S, Expr) :- is_stream(S),!,phrase_from_stream_part(file_sexpr(Expr),S),!.
 parse_sexpr_ascii(Text, Expr) :- must(txt_to_codes(Text,Codes)),phrase(file_sexpr(Expr), Codes),!.
 
 :- export(file_sexpr//1).
@@ -383,6 +366,7 @@ file_sexpr(Expr) --> sexpr(Expr),!.
 
 %%  sexpr(L)// is semidet.
 %
+sexpr(O) --> [C],{C=<32},!,sexpr(O).
 sexpr(L)                      --> sblank,!,sexpr(L),!.
 sexpr(L)                      --> `(`, !, swhite, sexpr_list(L),!, swhite.
 sexpr('$OBJ'(vector,V))                 --> `#(`, !, sexpr_vector(V,`)`),!, swhite.
@@ -395,7 +379,6 @@ sexpr((A))              --> `|`, !, read_string_until(S,`|`), swhite,{atom_strin
 sexpr('#'(E))              --> `#$`, !, rsymbol('#$',E), swhite.
 sexpr('#'(E))              --> `&%`, !, rsymbol('#$',E), swhite.
 sexpr('#'(E))              --> `?`, !, rsymbol('?',E), swhite.
-sexpr('#\\'(C))                 --> `#\\`,rsymbol('',C), swhite.
 sexpr('$CHAR'(C))                 --> `#\\`,!,sym_or_num(C), swhite.
 sexpr((""))             --> `""`,!, swhite.
 sexpr((Txt))                 --> `#|`, !, read_string_until(S,`|#`), swhite,{text_to_string(S,Txt)}.
@@ -405,22 +388,20 @@ sexpr(['#'(backquote),E])         --> [96] , !, swhite, sexpr(E).
 sexpr(['#'(function),E])                 --> `#\'`, sexpr(E), !, swhite.
 sexpr(['$BQ-COMMA-ELIPSE',E]) --> `,@`, !, swhite, sexpr(E).
 sexpr('$COMMA'(E))            --> `,`, !, swhite, sexpr(E).
-sexpr(E)                      --> sym_or_num(E), swhite.
+sexpr(E)                      --> sym_or_num(E), swhite,!.
 
-sym_or_num('$COMPLEX'(L)) --> `#C(`,!, swhite, sexpr_list(L), swhite.
+sym_or_num('$COMPLEX'(L)) --> `#C(`,!, swhite, sexpr_list(L).
 sym_or_num((E)) --> snumber(S),{number_string(E,S)}.
-sym_or_num((E)) --> rsymbol_maybe('',E),!.
-sym_or_num('#'(E)) --> [C],{name(E,[C])}.
+sym_or_num('#'(E)) --> rsymbol_maybe('',E),!.
 
 sblank --> [C], {C =< 32},!, swhite.
 sblank --> line_comment(S),{nop(dmsg(line_comment(S)))},!,swhite.
 
 sblank_lines --> [C], {eoln(C)},!.
-sblank_lines --> [C], {C =< 32},!, sblank_lines.
+sblank_lines --> [C], {number(C),C =< 32},!, sblank_lines.
 
 swhite --> sblank,!.
 swhite --> [].
-
 
 %= 	 	 
 
@@ -439,7 +420,7 @@ l_line_comment([]) --> [C], {eoln(C)}, !.
 l_line_comment([C|L]) --> [C], l_line_comment(L).
 
 
-sexprs([H|T]) --> sexpr(H), !, sexprs(T).
+sexprs([H|T]) --> sexpr(H), !, sexprs(T),!.
 sexprs([]) --> [].
 
 
@@ -447,11 +428,11 @@ sexprs([]) --> [].
 
 sexpr_list([]) --> `)`, !.
 sexpr_list(_) --> `.`, [C], {\+ sym_char(C)}, !, {fail}.
-sexpr_list([Car|Cdr]) --> sexpr(Car), !, sexpr_rest(Cdr).
+sexpr_list([Car|Cdr]) --> sexpr(Car), !, sexpr_rest(Cdr),!.
 
 sexpr_rest([]) --> `)`, !.
 sexpr_rest(E) --> `.`, [C], {\+ sym_char(C)}, !, sexpr(E,C), !, `)`.
-sexpr_rest([Car|Cdr]) --> sexpr(Car), !, sexpr_rest(Cdr).
+sexpr_rest([Car|Cdr]) --> sexpr(Car), !, sexpr_rest(Cdr),!.
 
 sexpr_vector([],End) --> End, !.
 sexpr_vector([First|Rest],End) --> sexpr(First), !, sexpr_vector(Rest,End).
@@ -608,10 +589,8 @@ lisp_code_name_extra(27,`Escape`).
 lisp_code_name_extra(13,`Ret`).
 lisp_code_name_extra(10,`LF`).
 lisp_code_name_extra(10,`Linefeed`).
-lisp_code_name_extra(8,`BCKSPC`).
 lisp_code_name_extra(7,`bell`).
 
-:- set_prolog_flag(all_lisp_char_names,false).
 :- use_module(lisp_code_names).
 /*
 
@@ -619,6 +598,7 @@ lisp_code_name_extra(7,`bell`).
  (format  strm ":- module(lisp_code_names,[lisp_code_name/2]).~%:- set_prolog_flag(double_quotes,chars).~%~%")
  (loop for i from 0 to 655360 do (let ((cname (char-name (code-char i))) (uname4 (format ()  "U~4,'0X" i)) (uname8 (format ()  "U~8,'0X" i)))
   (unless (equal cname uname4) (unless (equal cname uname8)  (format  strm "lisp_code_name(~A,~S).~%" i  cname ))))))
+
 */
     	 
 
