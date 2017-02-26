@@ -345,6 +345,7 @@ parse_sexpr_str(S,Expr):- nb_setval('$maybe_string',t),parse_sexpr(string(S), Ex
 
 parse_sexpr(S, Expr) :- is_stream(S),!,catch(with_stream_pos(S,phrase_from_stream_part(file_sexpr(Expr),S)),at_end_of_stream(S),Expr=end_of_file).
 parse_sexpr(string(String), Expr) :- txt_to_codes(String,Codes),!,parse_sexpr_ascii(Codes, Expr).
+parse_sexpr((String), Expr) :- string(String),!, txt_to_codes(String,Codes),!,parse_sexpr_ascii(Codes, Expr).
 parse_sexpr(atom(String), Expr) :- txt_to_codes(String,Codes),!,parse_sexpr_ascii(Codes, Expr).
 parse_sexpr(text(String), Expr) :- txt_to_codes(String,Codes),!,parse_sexpr_ascii(Codes, Expr).
 parse_sexpr([E|List], Expr) :- parse_sexpr_ascii([E|List], Expr),!.
@@ -567,7 +568,7 @@ to_untyped(['#'(Backquote),Rest],Out):- Backquote == backquote, !,to_untyped(['#
 to_untyped(['#'(S)|Rest],Out):- nonvar(S), is_list(Rest),must_maplist(to_untyped,[S|Rest],[F|Mid]), 
           ((atom(F),t_l:s2p(F))-> Out=..[F|Mid];Out=[F|Mid]),
           to_untyped(Out,OOut).
-to_untyped([H|T],Forms):-is_list([H|T]),must(text_to_string_safe([H|T],Forms);maplist(to_untyped,[H|T],Forms)).
+% to_untyped([H|T],Forms):-is_list([H|T]),must(text_to_string_safe([H|T],Forms);maplist(to_untyped,[H|T],Forms)).
 to_untyped([H|T],[HH|TT]):-!,must_det_l((to_untyped(H,HH),to_untyped(T,TT))).
 to_untyped(ExprI,ExprO):- must(ExprI=..Expr),
   must_maplist(to_untyped,Expr,[HH|TT]),(atom(HH)-> ExprO=..[HH|TT] ; ExprO=[HH|TT]).
@@ -761,9 +762,11 @@ lisp_read_from_input(Forms):-lisp_read_from_stream(current_input,Forms),!.
 % Lisp Read Converted From Input.
 %
 lisp_read_from_stream(In,Forms):- is_stream(In), at_end_of_stream(In),!,end_of_file=Forms.
+lisp_read_from_stream(AsciiCodesList,FormsOut):- \+ is_stream(AsciiCodesList),
+    parse_sexpr(AsciiCodesList, Forms0),    
+    must(to_untyped(Forms0,Forms)).
 lisp_read_from_stream(In,Forms):- stream_source_typed(In,Type),stream_position(In,Pos,Pos),
- wdmsg(pos),must(to_untyped(Type,Forms)).
-
+ wdmsg(Pos),must(to_untyped(Type,Forms)).
 
 %= 	 	 
 
