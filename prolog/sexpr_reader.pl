@@ -15,6 +15,7 @@
   svar_fixvarname/2,
   sexpr_sterm_to_pterm/2,
   lisp_read_from_stream/2,
+  write_trans/4,
   parse_sexpr/2]).
 
 :- set_module(class(library)).
@@ -370,7 +371,7 @@ parse_sexpr_ascii(Text, Expr) :- must(txt_to_codes(Text,Codes)),phrase(file_sexp
 
 % Use DCG for parser.
 
-file_sexpr(O) --> [C],{C=<32},!,file_sexpr(O).
+file_sexpr(O) --> [C],{bx(C =< 32)},!,file_sexpr(O).
 file_sexpr('$COMMENT'(Expr)) --> line_comment(Expr),!.
 file_sexpr('$COMMENT'([])) --> sblank_lines,!.
 file_sexpr(end_of_file) --> [end_of_file],!.
@@ -413,11 +414,11 @@ sym_or_num((E)) --> snumber(S),{number_string(E,S)}.
 sym_or_num((E)) --> rsymbol_maybe('',E),!.
 sym_or_num('#'(E)) --> [C],{name(E,[C])}.
 
-sblank --> [C], {C =< 32},!, swhite.
+sblank --> [C], {bx(C =< 32)},!, swhite.
 sblank --> line_comment(S),{nop(dmsg(line_comment(S)))},!,swhite.
 
 sblank_lines --> [C], {eoln(C)},!.
-sblank_lines --> [C], {C =< 32},!, sblank_lines.
+sblank_lines --> [C], {bx(C =< 32)},!, sblank_lines.
 
 swhite --> sblank,!.
 swhite --> [].
@@ -469,7 +470,9 @@ read_string_until([C|S],HB) --> [C],read_string_until(S,HB).
 
 lchar(92) --> `\\`, !.
 lchar(34) --> `"`, !.
-lchar(N)  --> [C], {C >= 32, N is C}.
+lchar(N)  --> [C], {bx(C >= 32), bx(N is C)}.
+
+bx(CT2):- catch(CT2,E,(writeq(E),break)).
 
 rsymbol(Prepend,E) --> [C], {sym_char(C)}, sym_string(S), {string_to_atom([C|S],E0),atom_concat(Prepend,E0,E)}.
 
@@ -518,8 +521,8 @@ sexpr(E,C,X,Z) :- swhite([C|X],Y), sexpr(E,Y,Z).
 % Sym Char.  (not ";()#',`
 %  )
 %
-sym_char(C) :- nb_current('$maybe_string',t),!, C > 32, not(member(C,[34,59,40,41,35,39,44,96|`.:;!%`])).  
-sym_char(C) :- C > 32, not(member(C,[34,59,40,41,35,39,44,96])).  
+sym_char(C) :- nb_current('$maybe_string',t),!, bx(C >  32), not(member(C,[34,59,40,41,35,39,44,96|`.:;!%`])).  
+sym_char(C) :- bx(C >  32), not(member(C,[34,59,40,41,35,39,44,96])).  
 
 :- nb_setval('$maybe_string',[]).
 
@@ -1112,43 +1115,59 @@ read_pending_whitespace(In):- repeat, peek_char(In,Code),
    (( \+ char_type(Code,space), \+ char_type(Code,white))-> ! ; (get_char(In,_),fail)).
 
 
+temp_file_for(Name,Temp):- 
+  atomic_list_concat(List1,'/',Name),atomic_list_concat(List1,'_',Temp1),
+  atomic_list_concat(List2,'.',Temp1),atomic_list_concat(List2,'_',Temp2),
+  atomic_list_concat(List3,'\\',Temp2),atomic_list_concat(List3,'_',Temp3),
+  atom_concat(Temp3,'.tmp',Temp),!.
+  
 
-w_l_t(I,O):- parse_sexpr(I,M),to_untyped(M,MM),sexpr_sterm_to_pterm(MM,O),!.
+w_l_t(I,O):- parse_sexpr(I,M),to_untyped(M,O),!.
 
-with_lisp_translation(F,With):- 
-   l_open_input(F,I),
-   set_stream(I,encoding(octet)),
+:- meta_predicate(with_lisp_translation_cached(+,2,1)).
+:- meta_predicate(maybe_cache_lisp_translation(+,+,2)).
+
+with_lisp_translation_cached(LFile,WithPart1,WithPart2):- 
+   absolute_file_name(LFile,File),
+   temp_file_for(LFile,Temp),
+   maybe_cache_lisp_translation(File,Temp,WithPart1),
+   finish_lisp_translation_cached(File,Temp,WithPart2).
+
+finish_lisp_translation_cached(File,Temp,WithPart2):-
+   load_files([Temp],[qcompile(auto)]),
+   forall(lisp_trans(Part2,File:Line),
+   once((b_setval('$lisp_translation_line',Line),
+         call(WithPart2,Part2)))).
+  
+maybe_cache_lisp_translation(File,Temp,_):- \+ file_needs_rebuilt(Temp,File),!.
+maybe_cache_lisp_translation(File,Temp,WithPart1):- 
+ setup_call_cleanup(open(Temp,write,Outs),
+  must_det((format(Outs,'~N~q.~n',[:- multifile(lisp_trans/2)]),
+            format(Outs,'~N~q.~n',[:- dynamic(lisp_trans/2)]),
+            format(Outs,'~N~q.~n',[:- style_check(-singleton)]),
+            with_lisp_translation(File,write_trans(Outs,File,WithPart1)))),
+  ignore(catch(close(Outs),_,true))),!.
+  
+
+write_trans(Outs,File,WithPart1,Lisp):-
+   must_det((call(WithPart1,Lisp,Part1),
+   b_getval('$lisp_translation_line',Line),
+   format(Outs,'~N~q.~n',[lisp_trans(Part1,File:Line)]))),!.
+
+
+with_lisp_translation(In,With):- 
+   is_stream(In),!,
+   b_setval('$lisp_translation_stream',In),
+   set_stream(In,encoding(octet)),
    repeat,
-     w_l_t(I,O),
+     ignore((seek(In, 0, current, Line),b_setval('$lisp_translation_line',Line))),
+     w_l_t(In,O),
       (O==end_of_file->! ; (must_det(call(With,O)),fail)).
 
 with_lisp_translation(Other,With):- 
-  l_open_input(Other,In),
-   setup_call_cleanup(true,(repeat,with_lisp_translation(In,With)),true).
-
-% with_lisp_translation:-with_lisp_translation('dump.txt',=).
-wlt2(O):- 
-   open('dump.txt',read,I),see(I),repeat,current_input(I),baseKB:parse_sexpr(I,O),stream_property(I,position(POD)).
-
-wlt_w(O):- 
-   see('dump.txt'),repeat,current_input(I),baseKB:parse_sexpr(I,O),stream_property(I,position(POD)).
-
-wlt3(O):-
-  open('dump.txt',read,I),see(I),read_pending_whitespace(I),repeat,read_pending_whitespace(I),get_char(I,O),
-    nop((stream_to_lazy_list(I,LL),parse_sexpr_ascii(LL, Expr))).
-
-wlt4(Expr):-
-  open('dump.txt',read,I),see(I),read_pending_whitespace(I),repeat,
-   read_pending_whitespace(I),stream_to_lazy_list(I,LL),repeat,parse_sexpr_ascii(LL, Expr).
-
-wlt5(Expr):-
-  open('dump.txt',read,I),see(I),read_pending_whitespace(I),repeat,
-   read_pending_whitespace(I),read_line_to_codes(I,LL),parse_sexpr_ascii(LL, Expr).
-
-wlt6(Expr):-
-   open('dump.txt',read,I),see(I),read_pending_whitespace(I),repeat,read_pending_whitespace(I),stream_to_lazy_list(I,LL),sexpr(Expr,LL,_).
+   setup_call_cleanup(l_open_input(Other,In),
+     with_lisp_translation(In,With),
+     ignore(catch(close(In),_,true))),!.
 
 
-
-
-
+:- fixup_exports.
