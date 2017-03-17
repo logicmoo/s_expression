@@ -1,5 +1,5 @@
 name(s_expression).
-version('1.1.113').
+version('1.1.114').
 title('Utilities for Handling of S-Expression Lisp/Scheme-Like forms and parsing of KIF, GDL, PDDL, CLIF').
 keywords([reader,dcg,sexpr,pddl]).
 author( 'Douglas Miles', 'http://www.linkedin.com/in/logicmoo' ).
