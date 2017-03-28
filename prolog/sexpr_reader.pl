@@ -20,6 +20,8 @@
 
 :- set_module(class(library)).
 
+:- set_prolog_flag_until_eof(virtual_stubs,false).
+
 
  :- meta_predicate with_lisp_translation(+,1),input_to_forms_debug(+,2).
  :- meta_predicate see_seen(0).
