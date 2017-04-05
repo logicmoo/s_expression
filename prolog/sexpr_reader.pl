@@ -20,8 +20,6 @@
 
 :- set_module(class(library)).
 
-:- set_prolog_flag_until_eof(virtual_stubs,false).
-
 
  :- meta_predicate with_lisp_translation(+,1),input_to_forms_debug(+,2).
  :- meta_predicate see_seen(0).
@@ -88,6 +86,7 @@ clip_us(A,AO):-concat_atom(L,'-',A),concat_atom(L,'_',AO).
 %
 clip_qm(QA,AO):-atom_concat('??',A1,QA),!,atom_concat('_',A1,A),clip_us(A,AO).
 clip_qm(QA,AO):-atom_concat('?',A,QA),!,clip_us(A,AO).
+clip_qm(QA,AO):-atom_concat('@',A,QA),!,clip_us(A,AO).
 clip_qm(A,AO):-clip_us(A,AO).
 
 :- meta_predicate(sexpr_sterm_to_pterm(?,?)).
@@ -113,6 +112,7 @@ maybe_var(S,Name,'$VAR'(Name)):- S=='?',atom(Name),!.
 % S-expression Sterm Converted To Pterm.
 %
 sexpr_sterm_to_pterm(VAR,'$VAR'(V)):- atom(VAR),atom_concat('?',_,VAR),clip_qm(VAR,V),!.
+sexpr_sterm_to_pterm(VAR,'$VAR'(V)):- atom(VAR),atom_concat('@',_,VAR),clip_qm(VAR,V),!.
 sexpr_sterm_to_pterm(VAR,kw((V))):- atom(VAR),atom_concat(':',V2,VAR),clip_qm(V2,V),!.
 sexpr_sterm_to_pterm(VAR,VAR):-is_ftVar(VAR),!.
 % sexpr_sterm_to_pterm(List,PTERM):- append(Left,[S,Name|TERM],List),maybe_var(S,Name,Var),!,append(Left,[Var|TERM],NewList), sexpr_sterm_to_pterm(NewList,PTERM).
@@ -156,8 +156,9 @@ l_arity(_,1).
 % S-expression Converted To Pterm List.
 %
 
-sexpr_sterm_to_pterm_list(TERM,PTERMO):- is_list(TERM),append(BEFORE,[VAR],TERM),atom(VAR),atom_concat('@',RVAR,VAR),clip_qm(RVAR,V),!,append(BEFORE,'$VAR'(V),PTERM),
-   sexpr_sterm_to_pterm_list0(PTERM,PTERMO).
+sexpr_sterm_to_pterm_list(TERM,PTERMO):- is_list(TERM),append(BEFORE,[VAR],TERM),atom(VAR),
+  atom_concat('@',RVAR,VAR),clip_qm(RVAR,V),!,append(BEFORE,'$VAR'(V),PTERM),
+  sexpr_sterm_to_pterm_list0(PTERM,PTERMO).
 sexpr_sterm_to_pterm_list(TERM,PTERM):- sexpr_sterm_to_pterm_list0(TERM,PTERM).
 
 sexpr_sterm_to_pterm_list0(VAR,VAR):-is_ftVar(VAR),!.
@@ -455,6 +456,7 @@ sexpr_list([Car|Cdr]) --> sexpr(Car), !, sexpr_rest(Cdr).
 
 sexpr_rest([]) --> `)`, !.
 sexpr_rest(E) --> `.`, [C], {\+ sym_char(C)}, !, sexpr(E,C), !, `)`.
+sexpr_rest(E) --> `@`, rsymbol('?',E), `)`.
 sexpr_rest([Car|Cdr]) --> sexpr(Car), !, sexpr_rest(Cdr).
 
 sexpr_vector([],End) --> End, !.
@@ -557,6 +559,7 @@ to_untyped(S,S):- number(S),!.
 %to_untyped(S,O):- atom(S),catch(atom_number(S,O),_,fail),!.
 to_untyped(Var,'$VAR'(Name)):-svar(Var,Name),!.
 to_untyped(Atom,Atom):- \+ compound(Atom),!.
+to_untyped('@'(Var),'$VAR'(Name)):-svar_fixvarname(Var,Name),!.
 to_untyped('$BQ'(VarName),'$BQ'(VarName)):-!.
 to_untyped('#'(S),O):- !, (nonvar(S)->to_untyped(S,O) ; O='#'(S)).
 to_untyped('#\\'(S),C):-!,to_untyped('$CHAR'(S),C),!.
@@ -685,6 +688,8 @@ svar('$VAR'(Var),Name):-number(Var),format(atom(Name),'~w',['$VAR'(Var)]),!.
 svar('$VAR'(VarName),VarNameU):-svar_fixvarname(VarName,VarNameU),!.
 svar('$VAR'(Name),Name):-!.
 svar('?'(Name),NameU):-svar_fixvarname(Name,NameU),!.
+svar('@'(Name),NameU):-svar_fixvarname(Name,NameU),!.
+svar(VAR,NameU):-atom(VAR),atom_concat('@',Name,VAR),ok_varname(Name),!,svar_fixvarname(Name,NameI),atom_concat('_',NameI,NameU).
 svar(VAR,NameU):-atom(VAR),atom_concat('??',Name,VAR),ok_varname(Name),!,svar_fixvarname(Name,NameI),atom_concat('_',NameI,NameU).
 svar(VAR,NameU):-atom(VAR),atom_concat('?',Name,VAR),ok_varname(Name),svar_fixvarname(Name,NameU).
 svar(Var,Var):-var(Var),!.
