@@ -113,10 +113,10 @@ maybe_var(S,Name,'$VAR'(Name)):- S=='?',atom(Name),!.
 %
 % S-expression Sterm Converted To Pterm.
 %
+sexpr_sterm_to_pterm(VAR,VAR):-is_ftVar(VAR),!.
 sexpr_sterm_to_pterm(VAR,'$VAR'(V)):- atom(VAR),atom_concat('?',_,VAR),clip_qm(VAR,V),!.
 sexpr_sterm_to_pterm(VAR,'$VAR'(V)):- atom(VAR),atom_concat('@',_,VAR),clip_qm(VAR,V),!.
-sexpr_sterm_to_pterm(VAR,kw((V))):- atom(VAR),atom_concat(':',V2,VAR),clip_qm(V2,V),!.
-sexpr_sterm_to_pterm(VAR,VAR):-is_ftVar(VAR),!.
+sexpr_sterm_to_pterm(':-',':-'):-!.
 % sexpr_sterm_to_pterm(List,PTERM):- append(Left,[S,Name|TERM],List),maybe_var(S,Name,Var),!,append(Left,[Var|TERM],NewList), sexpr_sterm_to_pterm(NewList,PTERM).
 % sexpr_sterm_to_pterm([S|TERM],dot_holds(PTERM)):- \+ (is_list(TERM)),sexpr_sterm_to_pterm_list([S|TERM],PTERM),!.
 %sexpr_sterm_to_pterm([S|TERM],PTERM):- \+ atom(S),sexpr_sterm_to_pterm_list([S|TERM],PTERM),!.
@@ -330,18 +330,29 @@ lazy_forgotten(In,UnUsed,UnUsed):-
 % tstl(I):- with_lisp_translation(I,([O]>>(writeq(O),nl))).
 tstl(I):- with_lisp_translation(I,writeqnl).
 
-supports_seek(In):- notrace(( catch((seek(In, 1, current, _),seek(In, -1, current, _)),
-  error(permission_error(reposition, stream, _), _Ctx),fail))).
+supports_seek(In):- stream_property(In,file(_)),!.
+supports_seek(In):- notrace(( catch((catch((seek(In, 1, current, _),seek(In, -1, current, _)),
+  error(permission_error(reposition, stream, _), _Ctx),fail)),error(_,_),true))).
 
 phrase_from_stream_eof(Grammar, _):- Grammar=end_of_file,!.
 phrase_from_stream_eof(Grammar, _):- term_variables(Grammar,[end_of_file]),!.
 phrase_from_stream_eof(_, In):- throw(at_end_of_stream(In)).
 
-phrase_from_stream_part(Grammar, In) :- \+ supports_seek(In),!,phrase_from_pending_stream(Grammar, In).
 phrase_from_stream_part(Grammar, In) :- at_end_of_stream(In),!,phrase_from_stream_eof(Grammar, In).
-phrase_from_stream_part(Grammar, In) :- 
-     supports_seek(In),
-     stream_property(In,file(_)),
+phrase_from_stream_part(Grammar, In) :-  stream_property(In,file(_)), !,
+    %  supports_seek(In),!,
+     seek(In, 0, current, Prev),
+     stream_to_lazy_list(In, List),
+     phrase(Grammar, List, More),
+     length(List,Used),
+     length(More,UnUsed),
+     Offset is Used - UnUsed + Prev,
+     % dmsg((Offset is Used - UnUsed + Prev)),
+     seek(In,Offset,bof,NewPos),!.
+     
+
+phrase_from_stream_part(Grammar, In) :-  stream_property(In,file(_)),
+    %  supports_seek(In),!,
      seek(In, 0, current, Prev),
      stream_to_lazy_list(In, List),
      (phrase(Grammar, List, More) 
@@ -353,6 +364,7 @@ phrase_from_stream_part(Grammar, In) :-
         seek(In,Offset,bof,NewPos),!))
       ; seek(In,Prev,bof,_NewPos)).      
     
+% phrase_from_stream_part(Grammar, In) :- \+ supports_seek(In),!,phrase_from_pending_stream(Grammar, In).
 phrase_from_stream_part(Grammar, In) :- phrase_from_pending_stream(Grammar, In).
 
 phrase_from_pending_stream(Grammar, In):-
@@ -434,11 +446,11 @@ parse_sexpr_ascii(Text, Expr) :- txt_to_codes(Text,Codes), !, phrase(file_sexpr(
 
 % Use DCG for parser.
 
-file_sexpr(end_of_file,I,O):- I==end_of_file,!,O=[].
-file_sexpr(end_of_file) --> [end_of_file],!.
-file_sexpr(end_of_file) --> [-1],!.
-file_sexpr(O) --> one_blank,!,file_sexpr(O).
+% file_sexpr(end_of_file,I,O):- I==end_of_file,!,O=[].
+file_sexpr(end_of_file) --> [X],{ X == -1},!.
+file_sexpr(end_of_file) --> [X],{ X == end_of_file},!.
 file_sexpr('$COMMENT'(Expr)) --> line_comment(Expr),!.
+file_sexpr(O) --> one_blank,!,file_sexpr(O).
 file_sexpr('$COMMENT'([])) --> sblank_lines,!.
 
 %   0.0003:   (PICK-UP ANDY IBM-R30 CS-LOUNGE) [0.1000]
@@ -446,14 +458,11 @@ file_sexpr('$COMMENT'([])) --> sblank_lines,!.
 
 file_sexpr('#+'(C,O)) --> `#+`,!,sexpr(C),swhite,!,file_sexpr(O).
 
-file_sexpr(Term,Left,Right):- member(EOL,[10,13]),append(LLeft,[46,EOL|Right],Left), 
-  read_term_from_codes(LLeft,Term,[double_quotes(string),syntax_errors(fail)]),!.
-file_sexpr(Term,Left,Right):- append(LLeft,[46|Right],Left), ( \+ member(46,Right)),
-  read_term_from_codes(LLeft,Term,[double_quotes(string),syntax_errors(fail)]),!.
+%file_sexpr(Term,Left,Right):- member(EOL,[10,13]),append(LLeft,[46,EOL|Right],Left),read_term_from_codes(LLeft,Term,[double_quotes(string),syntax_errors(fail)]),!.
+%file_sexpr(Term,Left,Right):- append(LLeft,[46|Right],Left), ( \+ member(46,Right)),read_term_from_codes(LLeft,Term,[double_quotes(string),syntax_errors(fail)]),!.
    
-
 file_sexpr(Expr) --> sexpr(Expr),!,swhite.
-file_sexpr('$eot') --> [],{!,fail}.
+% file_sexpr('$eot') --> [],{!,fail}.
 
 one_blank --> [C],{bx(C =< 32)}.
 
@@ -1212,32 +1221,32 @@ w_l_t(I,O):- parse_sexpr(I,M),to_untyped(M,O),!.
 :- meta_predicate(with_lisp_translation_cached(+,2,1)).
 :- meta_predicate(maybe_cache_lisp_translation(+,+,2)).
 
-with_lisp_translation_cached(LFile,WithPart1,WithPart2):- 
+with_lisp_translation_cached(LFile,WithPart2,WithPart1):- 
    absolute_file_name(LFile,File),
    temp_file_for(LFile,Temp),
-   maybe_cache_lisp_translation(File,Temp,WithPart1),
-   finish_lisp_translation_cached(File,Temp,WithPart2).
+   maybe_cache_lisp_translation(File,Temp,WithPart2),
+   finish_lisp_translation_cached(File,Temp,WithPart1).
 
-finish_lisp_translation_cached(File,Temp,WithPart2):-
+finish_lisp_translation_cached(File,Temp,WithPart1):-
    load_files([Temp],[qcompile(auto)]),
    forall(lisp_trans(Part2,File:Line),
    once((b_setval('$lisp_translation_line',Line),
-         call(WithPart2,Part2)))).
+         call(WithPart1,Part2)))).
   
 maybe_cache_lisp_translation(File,Temp,_):- \+ file_needs_rebuilt(Temp,File),!.
-maybe_cache_lisp_translation(File,Temp,WithPart1):- 
+maybe_cache_lisp_translation(File,Temp,WithPart2):- 
  setup_call_cleanup(open(Temp,write,Outs),
   must_det((format(Outs,'~N~q.~n',[:- multifile(lisp_trans/2)]),
             format(Outs,'~N~q.~n',[:- dynamic(lisp_trans/2)]),
             format(Outs,'~N~q.~n',[:- style_check(-singleton)]),
-            with_lisp_translation(File,write_trans(Outs,File,WithPart1)))),
+            with_lisp_translation(File,write_trans(Outs,File,WithPart2)))),
   ignore(catch(close(Outs),_,true))),!.
   
 
-write_trans(Outs,File,WithPart1,Lisp):-
-   must_det((call(WithPart1,Lisp,Part1),
+write_trans(Outs,File,WithPart2,Lisp):-
+   must_det((call(WithPart2,Lisp,Part),
    b_getval('$lisp_translation_line',Line),
-   format(Outs,'~N~q.~n',[lisp_trans(Part1,File:Line)]))),!.
+   format(Outs,'~N~q.~n',[lisp_trans(Part,File:Line)]))),!.
 
 
 with_lisp_translation(In,With):- 
