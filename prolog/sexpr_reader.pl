@@ -15,18 +15,20 @@
   svar_fixvarname/2,
   sexpr_sterm_to_pterm/2,
   lisp_read_from_stream/2,
+  phrase_from_stream_part/2,
   write_trans/4,
   parse_sexpr/2]).
 
 :- set_module(class(library)).
 
 
- :- meta_predicate with_lisp_translation(+,1),input_to_forms_debug(+,2).
- :- meta_predicate see_seen(0).
- :- meta_predicate sexpr_vector(*,//,?,?).
- :- meta_predicate phrase_from_stream_part(//,*).
- :- meta_predicate read_string_until(*,//,?,?).
+:- meta_predicate with_lisp_translation(+,1),input_to_forms_debug(+,2).
+:- meta_predicate see_seen(0).
+:- meta_predicate sexpr_vector(*,//,?,?).
+:- meta_predicate phrase_from_stream_part(//,+).
+:- meta_predicate read_string_until(*,//,?,?).
 
+:- module_transparent(phrase_from_stream_part/2).
 
 see_seen(_):-!.
 see_seen(G):-call(G).
@@ -237,7 +239,7 @@ input_to_forms_debug(
       (#$NLPattern-Exact "") (#$NLPattern-Template #$NPTemplate :ARG2)) (#$bioForProposal-short :ARG1 :ARG2)) `
  ).
 
-txt_to_codes("(documentation Predicate EnglishLanguage \"A &%Predicate is a sentence-forming &%Relation. Each tuple in the &%Relation is a finite, ordered sequence of objects. The fact that a particular tuple is an element of a &%Predicate is denoted by '(*predicate* arg_1 arg_2 .. arg_n)', where the arg_i are the objects so related. In the case of &%BinaryPredicates, the fact can be read as `arg_1 is *predicate* arg_2' or `a *predicate* of arg_1 is arg_2'.\")",X).
+% txt_to_codes("(documentation Predicate EnglishLanguage \"A &%Predicate is a sentence-forming &%Relation. Each tuple in the &%Relation is a finite, ordered sequence of objects. The fact that a particular tuple is an element of a &%Predicate is denoted by '(*predicate* arg_1 arg_2 .. arg_n)', where the arg_i are the objects so related. In the case of &%BinaryPredicates, the fact can be read as `arg_1 is *predicate* arg_2' or `a *predicate* of arg_1 is arg_2'.\")",X).
 input_to_forms_debug("(documentation Predicate EnglishLanguage \"A &%Predicate is a sentence-forming &%Relation. Each tuple in the &%Relation is a finite, ordered sequence of objects. The fact that a particular tuple is an element of a &%Predicate is denoted by '(*predicate* arg_1 arg_2 .. arg_n)', where the arg_i are the objects so related. In the case of &%BinaryPredicates, the fact can be read as `arg_1 is *predicate* arg_2' or `a *predicate* of arg_1 is arg_2'.\")",X,Y).
 
 // ==================================================================== */
@@ -272,17 +274,21 @@ input_to_forms_debug(String,Decoder):-input_to_forms(String,Wff,Vs),
 % Get Input Converted To Forms.
 %
 input_to_forms(Codes,FormsOut,Vars):- 
-  b_setval('$variable_names',[]),
-  input_to_forms0(Codes,FormsOut,Vars),!.
+  b_setval('$variable_names',[])-> 
+  input_to_forms0(Codes,FormsOut,Vars) *->
+  nop(set_variable_names_safe(Vars)).
+  
+
+set_variable_names_safe(Vars):-
+  b_setval('$variable_names',Vars).
 
 input_to_forms0(Codes,FormsOut,Vars):- 
-    is_openable(Codes)->
-    parse_sexpr(Codes, Forms0)->
-    to_untyped(Forms0, Forms1)->
-    extract_lvars(Forms1,FormsOut,Vars),!.
+    is_openable(Codes),!,
+    parse_sexpr(Codes, Forms0),
+    once((to_untyped(Forms0, Forms1),extract_lvars(Forms1,FormsOut,Vars))).
 input_to_forms0(Forms,FormsOut,Vars):-
-    to_untyped(Forms, Forms1) ->
-    extract_lvars(Forms1,FormsOut,Vars)-> true.
+    (to_untyped(Forms, Forms1) ->
+    extract_lvars(Forms1,FormsOut,Vars)-> true),!.
 
 
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -308,23 +314,6 @@ tstl:- tstl('./games/ontologyportal_sumo/Merge.kif'),
 
 writeqnl(O):-writeq(O),nl.
 
-% :- use_module(library(yall)).
-% :- rtrace.
-% tstl(I):- with_lisp_translation(I,([O]>>(writeq(O),nl))).
-tstl(I):- with_lisp_translation(I,writeqnl).
-
-phrase_from_stream_part(Grammar, In) :- at_end_of_stream(In),!,
-  (Grammar=end_of_file;term_variables(In,[end_of_file|_]);throw(at_end_of_stream(In))).
-phrase_from_stream_part(Grammar, In) :-   
-     seek(In, 0, current, Prev),
-     stream_to_lazy_list(In, List),
-     phrase(Grammar, List, More),
-     length(List,Used),
-     length(More,UnUsed),
-     Offset is Used - UnUsed + Prev,
-     % dmsg((Offset is Used - UnUsed + Prev)),
-     seek(In,Offset,bof,NewPos),!.
-
 
 /* alternate method*/
 phrase_from_stream_partial(Grammar, In):-
@@ -334,6 +323,72 @@ lazy_forgotten(In,UnUsed,UnUsed):-
   (is_list(UnUsed)-> true ; append(UnUsed,[],UnUsed)),
   length(UnUsed,PlzUnread),
   seek(In, -PlzUnread, current, _).
+
+
+% :- use_module(library(yall)).
+% :- rtrace.
+% tstl(I):- with_lisp_translation(I,([O]>>(writeq(O),nl))).
+tstl(I):- with_lisp_translation(I,writeqnl).
+
+supports_seek(In):- notrace(( catch((seek(In, 1, current, _),seek(In, -1, current, _)),
+  error(permission_error(reposition, stream, _), _Ctx),fail))).
+
+phrase_from_stream_eof(Grammar, _):- Grammar=end_of_file,!.
+phrase_from_stream_eof(Grammar, _):- term_variables(Grammar,[end_of_file]),!.
+phrase_from_stream_eof(_, In):- throw(at_end_of_stream(In)).
+
+phrase_from_stream_part(Grammar, In) :- \+ supports_seek(In),!,phrase_from_pending_stream(Grammar, In).
+phrase_from_stream_part(Grammar, In) :- at_end_of_stream(In),!,phrase_from_stream_eof(Grammar, In).
+phrase_from_stream_part(Grammar, In) :- 
+     supports_seek(In),
+     stream_property(In,file(_)),
+     seek(In, 0, current, Prev),
+     stream_to_lazy_list(In, List),
+     (phrase(Grammar, List, More) 
+      *-> 
+        ((length(List,Used),
+        length(More,UnUsed),
+        Offset is Used - UnUsed + Prev,
+        % dmsg((Offset is Used - UnUsed + Prev)),
+        seek(In,Offset,bof,NewPos),!))
+      ; seek(In,Prev,bof,_NewPos)).      
+    
+phrase_from_stream_part(Grammar, In) :- phrase_from_pending_stream(Grammar, In).
+
+phrase_from_pending_stream(Grammar, In):-
+   un_fake_buffer_codes(In,CodesPrev),
+   phrase_from_pending_stream(CodesPrev, Grammar, In).
+
+phrase_from_pending_stream(CodesPrev,Grammar,In):- 
+  read_codes_from_pending_input(In,Codes),!,
+  ((Codes==end_of_file ; Codes==[-1]) -> 
+     phrase_from_stream_eof(Grammar, In); 
+     (append(CodesPrev,Codes,NewCodes), !,
+       (phrase(Grammar, NewCodes, NewBuffer) 
+        *-> re_fake_buffer_codes(In,NewBuffer);
+          phrase_from_pending_stream(NewCodes,Grammar,In)))),!.
+
+
+
+
+:- thread_local(t_l:fake_buffer_codes/2).
+
+un_fake_buffer_codes(In,Codes):- retract(t_l:fake_buffer_codes(In,Codes)),!.
+un_fake_buffer_codes(_In,[]). % for first read
+
+re_fake_buffer_codes(In,Codes):- retract(t_l:fake_buffer_codes(In,CodesPrev)),!,append(CodesPrev,Codes,NewCodes),assert(t_l:fake_buffer_codes(In,NewCodes)),!.
+re_fake_buffer_codes(In,Codes):- assert(t_l:fake_buffer_codes(In,Codes)),!.
+
+wait_on_input(In):- stream_property(In,end_of_stream(Not)),Not\==not,!.
+wait_on_input(In):- repeat,wait_for_input([In],List,1.0),List==[In],!.
+
+read_codes_from_pending_input(In,Out):- stream_property(In,end_of_stream(Not)),Not\==not,!,(Not==at->Out=end_of_file;Out=[-1]).
+read_codes_from_pending_input(In,Codes):-  stream_property(In, buffer(none)),!,
+   repeat,
+    once(( wait_on_input(In),
+    read_pending_codes(In,Codes,[]))),
+    (Codes==[] -> (sleep(0.01),fail); true),!.
+read_codes_from_pending_input(In,[Code|Codes]):-  get_code(In,Code),read_pending_codes(In,Codes,[]),!.
 
  
 
@@ -346,45 +401,61 @@ lazy_forgotten(In,UnUsed,UnUsed):-
 
 parse_sexpr_str(S,Expr):- nb_setval('$maybe_string',t),parse_sexpr(string(S), Expr),nb_setval('$maybe_string',[]).
 
+parse_sexpr_stream(S,Expr):- 
+  catch(
+    phrase_from_stream_part(file_sexpr(Expr),S),
+    at_end_of_stream(S),
+    Expr=end_of_file).
 
-parse_sexpr(S, Expr) :- is_stream(S),!,catch(with_stream_pos(S,phrase_from_stream_part(file_sexpr(Expr),S)),at_end_of_stream(S),Expr=end_of_file).
-parse_sexpr(string(String), Expr) :- txt_to_codes(String,Codes),!,parse_sexpr_ascii(Codes, Expr).
+parse_sexpr(S, Expr) :- is_stream(S),!,parse_sexpr_stream(S,Expr).
+parse_sexpr(string(String), Expr) :- !,txt_to_codes(String,Codes),!,parse_sexpr_ascii(Codes, Expr).
+parse_sexpr(atom(String), Expr) :- !,txt_to_codes(String,Codes),!,parse_sexpr_ascii(Codes, Expr).
+parse_sexpr(text(String), Expr) :- !,txt_to_codes(String,Codes),!,parse_sexpr_ascii(Codes, Expr).
 parse_sexpr((String), Expr) :- string(String),!, txt_to_codes(String,Codes),!,parse_sexpr_ascii(Codes, Expr).
-parse_sexpr(atom(String), Expr) :- txt_to_codes(String,Codes),!,parse_sexpr_ascii(Codes, Expr).
-parse_sexpr(text(String), Expr) :- txt_to_codes(String,Codes),!,parse_sexpr_ascii(Codes, Expr).
-parse_sexpr([E|List], Expr) :- parse_sexpr_ascii([E|List], Expr),!.
+parse_sexpr([E|List], Expr) :- !, parse_sexpr_ascii([E|List], Expr),!.
 parse_sexpr(Other, Expr) :- l_open_input(Other,In),!,parse_sexpr(In, Expr).
 
 :- export(txt_to_codes/2).
-txt_to_codes(AttVar,AttVar):-attvar(AttVar),!.
+txt_to_codes(AttVar,AttVarO):-attvar(AttVar),!,AttVarO=AttVar.
 txt_to_codes(S,Codes):- is_stream(S),!,stream_to_lazy_list(S,Codes),!.
-txt_to_codes([C|Text],[C|Text]):- number(C),!.
-txt_to_codes([C|Text],_):- atom(C),atom_length(C,1),!,throw(txt_to_codes([C|Text])).
-txt_to_codes(Text,Codes):- catch((text_to_string(Text,String),string_codes(String,Codes)),_,fail).
+txt_to_codes([C|Text],[C|Text]):- integer(C),is_list(Text),!.
+% txt_to_codes([C|Text],_):- atom(C),atom_length(C,1),!,throw(txt_to_codes([C|Text])).
+txt_to_codes(Text,Codes):- catch((text_to_string(Text,String),!,string_codes(String,Codes)),_,fail).
 
 %% parse_sexpr_ascii( ?Codes, ?Expr) is semidet.
 %
 % Parse S-expression Codes.
 %
-parse_sexpr_ascii(S, Expr) :- is_stream(S),!,phrase_from_stream_part(file_sexpr(Expr),S).
-parse_sexpr_ascii(Text, Expr) :- must(txt_to_codes(Text,Codes)),phrase(file_sexpr(Expr), Codes),!.
+parse_sexpr_ascii(S, Expr) :- is_stream(S),!,parse_sexpr_stream(S,Expr),!.
+parse_sexpr_ascii(Text, Expr) :- txt_to_codes(Text,Codes), !, phrase(file_sexpr(Expr), Codes, []),!.
 
 :- export(file_sexpr//1).
 :- export(sexpr//1).
 
 % Use DCG for parser.
 
-file_sexpr(O) --> [C],{bx(C =< 32)},!,file_sexpr(O).
-file_sexpr('$COMMENT'(Expr)) --> line_comment(Expr),!.
-file_sexpr('$COMMENT'([])) --> sblank_lines,!.
+file_sexpr(end_of_file,I,O):- I==end_of_file,!,O=[].
 file_sexpr(end_of_file) --> [end_of_file],!.
 file_sexpr(end_of_file) --> [-1],!.
+file_sexpr(O) --> one_blank,!,file_sexpr(O).
+file_sexpr('$COMMENT'(Expr)) --> line_comment(Expr),!.
+file_sexpr('$COMMENT'([])) --> sblank_lines,!.
 
 %   0.0003:   (PICK-UP ANDY IBM-R30 CS-LOUNGE) [0.1000]
 % file_sexpr(planStepLPG(Name,Expr,Value)) --> swhite,sym_or_num(Name),`:`,swhite, sexpr(Expr),swhite, `[`,sym_or_num(Value),`]`,swhite.
 
-file_sexpr(Expr) --> sexpr(Expr),!.
+file_sexpr('#+'(C,O)) --> `#+`,!,sexpr(C),swhite,!,file_sexpr(O).
 
+file_sexpr(Term,Left,Right):- member(EOL,[10,13]),append(LLeft,[46,EOL|Right],Left), 
+  read_term_from_codes(LLeft,Term,[double_quotes(string),syntax_errors(fail)]),!.
+file_sexpr(Term,Left,Right):- append(LLeft,[46|Right],Left), ( \+ member(46,Right)),
+  read_term_from_codes(LLeft,Term,[double_quotes(string),syntax_errors(fail)]),!.
+   
+
+file_sexpr(Expr) --> sexpr(Expr),!,swhite.
+file_sexpr('$eot') --> [],{!,fail}.
+
+one_blank --> [C],{bx(C =< 32)}.
 
 %%  sexpr(L)// is semidet.
 %
@@ -652,7 +723,7 @@ remove_incompletes([NV|Before],[NV|CBefore]):-
 extract_lvars(A,B,After):-
      (get_varname_list(Before)->true;Before=[]),
      remove_incompletes(Before,CBefore),!,
-     copy_lvars(A,CBefore,B,After).
+     copy_lvars(A,CBefore,B,After),!.
 
 % copy_lvars( VAR,Vars,VAR,Vars):- var(VAR),!.
 
@@ -683,7 +754,9 @@ copy_lvars(Term,Vars,NTerm,NVars):-
 %
 % Svar.
 %
-svar(Var,NameU):-var(Var),!,format(atom(Name),'~w',[(Var)]),!,atom_concat('_',NameU,Name).
+svar(Var,Name):-var(Var),get_varname_list(Vs),member(Name=V,Vs),atomic(Name),V==Var,!.
+svar(Var,NameU):-var(Var),format(atom(Name),'~w',[(Var)]),fix_wvar_name(Name,NameU),!.
+svar(Var,Var):-var(Var),!.
 svar('$VAR'(Var),Name):-number(Var),format(atom(Name),'~w',['$VAR'(Var)]),!.
 svar('$VAR'(VarName),VarNameU):-svar_fixvarname(VarName,VarNameU),!.
 svar('$VAR'(Name),Name):-!.
@@ -692,7 +765,11 @@ svar('@'(Name),NameU):-svar_fixvarname(Name,NameU),!.
 svar(VAR,NameU):-atom(VAR),atom_concat('@',Name,VAR),ok_varname(Name),!,svar_fixvarname(Name,NameI),atom_concat('_',NameI,NameU).
 svar(VAR,NameU):-atom(VAR),atom_concat('??',Name,VAR),ok_varname(Name),!,svar_fixvarname(Name,NameI),atom_concat('_',NameI,NameU).
 svar(VAR,NameU):-atom(VAR),atom_concat('?',Name,VAR),ok_varname(Name),svar_fixvarname(Name,NameU).
-svar(Var,Var):-var(Var),!.
+
+
+fix_wvar_name(NameU,NameO):-atom_concat('_',Name,NameU),fix_wvar_name(Name,NameO).
+fix_wvar_name(Name,NameU):-svar_fixvarname(Name,NameU),\+ atom_number(NameU,_).
+fix_wvar_name(Name,NameU):-atom_concat('_',Name,NameU).
 
 
 :- export(svar_fixvarname/2).
@@ -736,8 +813,8 @@ fix_varcase0(Word,Word). % mixed case
 %
 % Ok Varname.
 %
-ok_varname(Name):- number(Name).
-ok_varname(Name):- atom(Name),atom_codes(Name,[C|_List]),char_type(C,csym).
+ok_varname(Name):- integer(Name).
+ok_varname(Name):- atom(Name),atom_codes(Name,[C|_List]),char_type(C,prolog_var_start).
 
 %:- export(ok_codes_in_varname/1).
 %ok_codes_in_varname([]).
@@ -773,9 +850,10 @@ lisp_read_from_input(Forms):-lisp_read_from_stream(current_input,Forms),!.
 %
 lisp_read_from_stream(In,Forms):- is_stream(In), at_end_of_stream(In),!,end_of_file=Forms.
 lisp_read_from_stream(AsciiCodesList,FormsOut):- \+ is_stream(AsciiCodesList),
-    parse_sexpr(AsciiCodesList, Forms0),    
-    must(to_untyped(Forms0,Forms)).
-lisp_read_from_stream(In,Forms):- stream_source_typed(In,Type),stream_position(In,Pos,Pos),
+    parse_sexpr(AsciiCodesList, Forms0),!,must(to_untyped(Forms0,Forms)).
+lisp_read_from_stream(In,Forms):- 
+ stream_source_typed(In,Type),!,
+ stream_position(In,Pos,Pos),!,
  wdmsg(Pos),must(to_untyped(Type,Forms)).
 
 %= 	 	 
@@ -784,7 +862,7 @@ lisp_read_from_stream(In,Forms):- stream_source_typed(In,Type),stream_position(I
 %
 % Stream Source Typed.
 %
-stream_source_typed(In,Expr):- !,parse_sexpr(In,Expr).
+stream_source_typed(In,Expr):- parse_sexpr(In,Expr),!.
 stream_source_typed(In,Expr):-
  (read_line_to_codes(current_input,AsciiCodes),
       (AsciiCodes==[]-> (at_end_of_stream(In) -> (Expr=end_of_file); stream_source_typed(In,Expr)); 
