@@ -790,8 +790,12 @@ svar(VAR,Name):-atom(VAR),atom_concat('?',_,VAR),svar_fixvarname(VAR,Name),!.
 svar_fixvarname(Var,NameO):-var(Var),get_var_name(Var,Name),nonvar(Name),!,svar_fixvarname(Name,NameO).
 svar_fixvarname(Var,NameU):-var(Var),format(atom(Name),'~w',[(Var)]),svar_fixvarname(Name,NameU),!.
 svar_fixvarname(Var,Var):-var(Var),!.
-svar_fixvarname('?'(SVAR),UP):- !,must(svar('?'(SVAR),UP)).
-svar_fixvarname('@'(SVAR),UP):- !,must(svar('@'(SVAR),UP)).
+svar_fixvarname('?'(Name),UP):- !,must(svar('?'(Name),UP)).
+svar_fixvarname('$VAR'(Name),UP):- !,must(svar('@'(Name),UP)).
+svar_fixvarname('@'(Name),UP):- !,svar_fixvarname(Name,UP).
+svar_fixvarname('?'(Name),UP):- !,svar_fixvarname(Name,UP).
+svar_fixvarname('$VAR'(Name),UP):- !,svar_fixvarname(Name,UP).
+svar_fixvarname(SVAR,SVAR):- ok_var_name(SVAR),!.
 svar_fixvarname(QA,AU):-atom_concat('??',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO),atom_concat('_',AO,AU).
 svar_fixvarname(QA,AO):-atom_concat('?',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO).
 svar_fixvarname(QA,AO):-atom_concat('@',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO).
@@ -804,7 +808,6 @@ svar_fixvarname(I,O):-
   atom_subst(M2,':','_C_',M3),
   atom_subst(M3,'-','_',O),
   ok_var_name(O))),!.
-svar_fixvarname(SVAR,SVAR):- ok_var_name(SVAR),!.
 svar_fixvarname(SVAR,UP):- trace_or_throw(svar_fixvarname(SVAR,UP)).
 
 %= 	 	 
