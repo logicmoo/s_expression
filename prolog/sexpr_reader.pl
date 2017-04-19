@@ -396,7 +396,7 @@ read_codes_from_pending_input(In,Codes):-  stream_property(In, buffer(none)),!,
     (Codes==[] -> (sleep(0.01),fail); true),!.
 read_codes_from_pending_input(In,[Code|Codes]):-  get_code(In,Code),read_pending_codes(In,Codes,[]),!.
 
-charvar(C):- integer(C)-> true; (writeln(charvar(C)),break).
+charvar(C):- integer(C)-> true; (writeln(charvar(C)),break,fail).
 
 %= 	 	 
 
@@ -411,7 +411,7 @@ parse_sexpr_stream(S,Expr):-
   catch(
     phrase_from_stream_part(file_sexpr(Expr),S),
     at_end_of_stream(S),
-    Expr=end_of_file).
+    Expr=end_of_file),!.
 
 parse_sexpr(S, Expr) :- is_stream(S),!,parse_sexpr_stream(S,Expr).
 parse_sexpr(string(String), Expr) :- !,txt_to_codes(String,Codes),!,parse_sexpr_ascii(Codes, Expr).
@@ -443,7 +443,7 @@ parse_sexpr_ascii(Text, Expr) :- txt_to_codes(Text,Codes), !, phrase(file_sexpr(
 sexpr_dcgPeek(Grammer,List,List):- phrase(Grammer,List,_).
 sexpr_dcgUnless(Grammer,List,List):- \+ phrase(Grammer,List,_).
 
-% file_sexpr(end_of_file,I,O):- I==end_of_file,!,O=[].
+file_sexpr(end_of_file,I,O):- I==end_of_file,!,O=[].
 file_sexpr(end_of_file) --> [X],{ attvar(X), X = -1},!.
 file_sexpr(end_of_file) --> [X],{ attvar(X), X = end_of_file},!.
 file_sexpr('$COMMENT'(Expr)) --> line_comment(Expr),!.
@@ -460,14 +460,14 @@ file_sexpr('#+'(C,O)) --> `#+`,!,sexpr(C),swhite,!,file_sexpr(O).
 
 file_sexpr(Expr) --> sexpr(Expr),!.
 % Want? file_sexpr(Expr) --> sexpr(Expr),!,swhite.
-file_sexpr(_) --> [_|_],!,{fail}.
+% file_sexpr(_) --> [_|_],!,{fail}.
 file_sexpr(end_of_file) --> [].
 
 %%  sexpr(L)// is semidet.
 %
 sexpr(L)                      --> sblank,!,sexpr(L),!.
 sexpr(L)                      --> `(`, !, swhite, sexpr_list(L),!, swhite.
-sexpr('$OBJ'(vector,V))                 --> `#(`, !, sexpr_vector(V,`)`),!, swhite.
+sexpr('$OBJ'(vector,V))                 --> `#(`, !, sexpr_vector(V,`)`),!, swhite,!.
 sexpr('$OBJ'(vugly,V))                 --> `#<`, sexpr_vector(V,`>`),!, swhite.
 sexpr('$OBJ'(brack_vector,V))                 --> `[`, sexpr_vector(V,`]`),!, swhite.
 sexpr('$OBJ'(ugly,V))                 --> `#<`, read_string_until(V,`>`),!, swhite.
@@ -494,7 +494,8 @@ sym_or_num((E)) --> snumber(S),{number_string(E,S)}.
 sym_or_num((E)) --> rsymbol_maybe('',E),!.
 sym_or_num('#'(E)) --> [C],{name(E,[C])}.
 
-sblank --> [C], {charvar(C),!,bx(C =< 32)},!, swhite.
+sblank --> [C], {var(C)},!.
+sblank --> [C], {nonvar(C),charvar(C),!,bx(C =< 32)},!, swhite.
 sblank --> line_comment(S),{nop(dmsg(line_comment(S)))},!,swhite.
 
 sblank_lines --> {eoln(C)},[C],!.
