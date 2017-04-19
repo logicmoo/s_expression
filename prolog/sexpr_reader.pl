@@ -440,6 +440,9 @@ parse_sexpr_ascii(Text, Expr) :- txt_to_codes(Text,Codes), !, phrase(file_sexpr(
 
 % Use DCG for parser.
 
+sexpr_dcgPeek(Grammer,List,List):- phrase(Grammer,List,_).
+sexpr_dcgUnless(Grammer,List,List):- \+ phrase(Grammer,List,_).
+
 % file_sexpr(end_of_file,I,O):- I==end_of_file,!,O=[].
 file_sexpr(end_of_file) --> [X],{ attvar(X), X = -1},!.
 file_sexpr(end_of_file) --> [X],{ attvar(X), X = end_of_file},!.
@@ -463,17 +466,17 @@ file_sexpr(end_of_file) --> [].
 %%  sexpr(L)// is semidet.
 %
 sexpr(L)                      --> sblank,!,sexpr(L),!.
-sexpr(L)                      --> `(`, !, swhite, sexpr_list(L),!. %, swhite.
+sexpr(L)                      --> `(`, !, swhite, sexpr_list(L),!, swhite.
 sexpr('$OBJ'(vector,V))                 --> `#(`, !, sexpr_vector(V,`)`),!, swhite.
 sexpr('$OBJ'(vugly,V))                 --> `#<`, sexpr_vector(V,`>`),!, swhite.
 sexpr('$OBJ'(brack_vector,V))                 --> `[`, sexpr_vector(V,`]`),!, swhite.
 sexpr('$OBJ'(ugly,V))                 --> `#<`, read_string_until(V,`>`),!, swhite.
+sexpr('?'(E))              --> `?`, sexpr_dcgPeek(([C],{sym_char(C)})),!, rsymbol('?',E), swhite.
 sexpr('#'(t))                 --> `#t`, !, swhite.
 sexpr('#'(f))                 --> `#f`, !, swhite.
-sexpr((A))              --> `|`, !, read_string_until(S,`|`), swhite,{atom_string(A,S)}.
+sexpr('#'(A))              --> `|`, !, read_string_until(S,`|`), swhite,{atom_string(A,S)}.
 sexpr('#'(E))              --> `#$`, !, rsymbol('#$',E), swhite.
 sexpr('#'(E))              --> `&%`, !, rsymbol('#$',E), swhite.
-sexpr('#'(E))              --> `?`, !, rsymbol('?',E), swhite.
 sexpr('#\\'(C))                 --> `#\\`,rsymbol('',C), swhite.
 sexpr('$CHAR'(C))                 --> `#\\`,!,sym_or_num(C), swhite.
 sexpr((""))             --> `""`,!, swhite.
@@ -607,11 +610,11 @@ sexpr(E,C,X,Z) :- swhite([C|X],Y), sexpr(E,Y,Z).
 
 %% sym_char( ?C) is semidet.
 %
-% Sym Char.  (not ";()#',`
-%  )
+% Sym Char.  (not ";()#',` 
+% )
 %
-sym_char(C) :- nb_current('$maybe_string',t),!, bx(C >  32), not(member(C,[34,59,40,41,35,39,44,96|`.:;!%`])).  
-sym_char(C) :- bx(C >  32), not(member(C,[34,59,40,41,35,39,44,96])).  
+sym_char(C) :- nb_current('$maybe_string',t),!, bx(C >  32), \+ (member(C,[34,59,40,41,35,39,44,96|`.:;!%`])).  
+sym_char(C) :- bx(C >  32), \+ (member(C,[34,59,40,41,35,39,44,96])).  
 
 :- nb_setval('$maybe_string',[]).
 
@@ -637,6 +640,8 @@ to_unbackquote(I,O):-to_untyped(I,O).
 %
 to_untyped(S,S):- var(S),!.
 to_untyped([],[]):-!.
+to_untyped('?'(S),_):- S=='??',!.
+% to_untyped('?'(S),'$VAR'('_')):- S=='??',!.
 to_untyped(VAR,NameU):-atomic(VAR),atom_concat('#$',NameU,VAR),!.
 %to_untyped(S,s(L)):- string(S),atom_contains(S,' '),atomic_list_concat(['(',S,')'],O),parse_sexpr_str(O,L),!.
 to_untyped(S,S):- string(S),!.
@@ -766,17 +771,19 @@ copy_lvars(Term,Vars,NTerm,NVars):-
 
 %% svar( ?Var, ?NameU) is semidet.
 %
-% Svar.
+% If this is a KIF var, convert to a name for prolog
 %
-svar(Var,Name):-var(Var),!,must((svar_fixvarname(Var,Name))).
-svar('$VAR'(Var),Name):-number(Var),!,format(atom(Name),'~w',['$VAR'(Var)]),!.
-svar('$VAR'(VarName),VarNameU):-!,svar_fixvarname(VarName,VarNameU).
+svar(SVAR,UP):- nonvar(UP),!,trace_or_throw(nonvar_svar(SVAR,UP)).
+svar(Var,Name):-var(Var),!,must(svar_fixvarname(Var,Name)).
+svar('#'(Name),NameU):-!,svar(Name,NameU),!.
+
+svar('$VAR'(Var),Name):-number(Var),Var > -1, !, must(format(atom(Name),'~w',['$VAR'(Var)])),!.
+svar('$VAR'(Name),VarName):-!,must(svar_fixvarname(Name,VarName)).
 svar('?'(Name),NameU):-svar_fixvarname(Name,NameU),!.
 svar('@'(Name),NameU):-svar_fixvarname(Name,NameU),!.
-svar('#'(Name),NameU):-!,svar(Name,NameU),!.
-svar(VAR,Name):-atom(VAR),atom_concat('_',_,VAR),svar_fixvarname(VAR,Name),!.
-svar(VAR,Name):-atom(VAR),atom_concat('@',_,VAR),svar_fixvarname(VAR,Name),!.
-svar(VAR,Name):-atom(VAR),atom_concat('?',_,VAR),svar_fixvarname(VAR,Name),!.
+% svar(VAR,Name):-atom(VAR),atom_concat('_',_,VAR),svar_fixvarname(VAR,Name),!.
+svar(VAR,Name):-atom(VAR),atom_concat('@',A,VAR),non_empty_atom(A),svar_fixvarname(VAR,Name),!.
+svar(VAR,Name):-atom(VAR),atom_concat('?',A,VAR),non_empty_atom(A),svar_fixvarname(VAR,Name),!.
 
 
 :- export(svar_fixvarname/2).
@@ -787,20 +794,23 @@ svar(VAR,Name):-atom(VAR),atom_concat('?',_,VAR),svar_fixvarname(VAR,Name),!.
 %
 % Svar Fixvarname.
 %
-svar_fixvarname(Var,NameO):-var(Var),get_var_name(Var,Name),nonvar(Name),!,svar_fixvarname(Name,NameO).
-svar_fixvarname(Var,NameU):-var(Var),format(atom(Name),'~w',[(Var)]),svar_fixvarname(Name,NameU),!.
-svar_fixvarname(Var,Var):-var(Var),!.
-svar_fixvarname('?'(Name),UP):- !,must(svar('?'(Name),UP)).
-svar_fixvarname('$VAR'(Name),UP):- !,must(svar('@'(Name),UP)).
-svar_fixvarname('@'(Name),UP):- !,svar_fixvarname(Name,UP).
-svar_fixvarname('?'(Name),UP):- !,svar_fixvarname(Name,UP).
-svar_fixvarname('$VAR'(Name),UP):- !,svar_fixvarname(Name,UP).
-svar_fixvarname(SVAR,SVAR):- ok_var_name(SVAR),!.
-svar_fixvarname(QA,AU):-atom_concat('??',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO),atom_concat('_',AO,AU).
-svar_fixvarname(QA,AO):-atom_concat('?',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO).
-svar_fixvarname(QA,AO):-atom_concat('@',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO).
-svar_fixvarname(NameU,NameUO):-atom_concat('_',Name,NameU),non_empty_atom(Name),!, \+ atom_number(NameU,_),svar_fixvarname(NameU,NameO),atom_concat('_',NameO,NameUO).
-svar_fixvarname(I,O):-  
+
+svar_fixvarname(SVAR,UP):- nonvar(UP),!,trace_or_throw(nonvar_svar_fixvarname(SVAR,UP)).
+svar_fixvarname(SVAR,UP):- svar_fixname(SVAR,UP),!.
+svar_fixvarname(SVAR,UP):- trace_or_throw(svar_fixname(SVAR,UP)).
+
+svar_fixname(Var,NameO):-var(Var),variable_name_or_ref(Var,Name),sanity(nonvar(Name)),!,svar_fixvarname(Name,NameO).
+svar_fixname('$VAR'(Name),UP):- !,svar_fixvarname(Name,UP).
+svar_fixname('@'(Name),UP):- !,svar_fixvarname(Name,UP).
+svar_fixname('?'(Name),UP):- !,svar_fixvarname(Name,UP).
+svar_fixname(SVAR,SVARO):- ok_var_name(SVAR),!,SVARO=SVAR.
+svar_fixname('??','_'):-!.
+svar_fixname(QA,AU):-atom_concat('??',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO),atom_concat('_',AO,AU).
+svar_fixname(QA,AO):-atom_concat('?',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO).
+svar_fixname(QA,AO):-atom_concat('@',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO).
+svar_fixname(NameU,NameUO):-atom_concat('_',Name,NameU),non_empty_atom(Name),atom_number(Name,_),!.
+svar_fixname(NameU,NameUO):-atom_concat('_',Name,NameU),non_empty_atom(Name), \+ atom_number(Name,_),!,svar_fixvarname(Name,NameO),atom_concat('_',NameO,NameUO).
+svar_fixname(I,O):-  
  must_det_l((
   fix_varcase(I,M0),
   atom_subst(M0,'@','_AT_',M1),
@@ -808,7 +818,6 @@ svar_fixvarname(I,O):-
   atom_subst(M2,':','_C_',M3),
   atom_subst(M3,'-','_',O),
   ok_var_name(O))),!.
-svar_fixvarname(SVAR,UP):- trace_or_throw(svar_fixvarname(SVAR,UP)).
 
 %= 	 	 
 
