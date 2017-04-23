@@ -23,298 +23,78 @@
 
 
 :- meta_predicate((with_lisp_translation(+,1),input_to_forms_debug(+,2))).
-:- meta_predicate see_seen(0).
 :- meta_predicate sexpr_vector(*,//,?,?).
 :- meta_predicate phrase_from_stream_part(//,+).
 :- meta_predicate read_string_until(*,//,?,?).
 
-:- module_transparent(phrase_from_stream_part/2).
-
-see_seen(_):-!.
-see_seen(G):-call(G).
-
 :- dynamic user:file_search_path/2.
 :- multifile user:file_search_path/2.
 
-/*
-:- prolog_load_context(directory,Dir),
-   DirFor = plarkc,
-   (( \+ user:file_search_path(DirFor,Dir)) ->asserta(user:file_search_path(DirFor,Dir));true),
-   absolute_file_name('../../../../',Y,[relative_to(Dir),file_type(directory)]),
-   (( \+ user:file_search_path(pack,Y)) ->asserta(user:file_search_path(pack,Y));true).
-:- attach_packs.
-:- initialization(attach_packs).
-*/
 
-% [Required] Load the Logicmoo Library Utils
-% = % :- ensure_loaded(logicmoo(logicmoo_utils)).
-
-% % :- ensure_loaded(logicmoo(plarkc/mpred_cyc_api)).
-
-
-:- export(fixvars/4).
-
-%= 	 	 
-
-%% fixvars( ?P, ?VALUE2, :TermARG3, ?P) is semidet.
+%% with_lisp_translation( +FileOrStream, :Pred1) is det.
 %
-% Fixvars.
+% With File or Stream read all S-expressions submitting each to Pred1
 %
-fixvars(P,_,[],P):-!.
-fixvars(P,N,[V|VARS],PO):-  
-     atom_string(Name,V),svar_fixvarname(Name,NB),Var = '$VAR'(NB),
-     subst(P,'$VAR'(N),Var,PM0),
-     subst(PM0,'$VAR'(Name),Var,PM),
-   %  (get_varname_list(Vs)->true;Vs=[]),
-  %   append(Vs,[Name=Var],NVs),
-  %   nput_variable_names( NVs),
-     N2 is N + 1, fixvars(PM,N2,VARS,PO).
+with_lisp_translation(In,Pred1):- 
+   is_stream(In),!,
+   b_setval('$lisp_translation_stream',In),
+   set_stream(In,encoding(octet)),!,
+   repeat,
+     ignore(catch(line_count(In,Line),_,(Line = -1))),
+     b_setval('$lisp_translation_line',Line),
+     maybe_notrace(parse_sexpr_untyped(In,O)),
+      (O== end_of_file -> ! ; 
+  (must_det(once(maybe_notrace(call(Pred1,O)))),fail)).
+
+with_lisp_translation(Other,Pred1):- 
+   setup_call_cleanup(l_open_input(Other,In),
+     with_lisp_translation(In,Pred1),
+     ignore(catch(close(In),_,true))),!.
+
+parse_sexpr_untyped(I,O):- parse_sexpr(I,M),to_untyped(M,O),!.
+
+read_pending_whitespace(In):- repeat, peek_char(In,Code),
+   (( \+ char_type(Code,space), \+ char_type(Code,white))-> ! ; (get_char(In,_),fail)).
 
 
-
-
-non_empty_atom(A1):- atom(A1),atom_length(A1,AL),!,AL>0.
-
-:- meta_predicate(sexpr_sterm_to_pterm(?,?)).
-:- meta_predicate(sexpr_sterm_to_pterm_list(?,?)).
-
-is_relation_sexpr('=>').
-is_relation_sexpr('<=>').
-is_relation_sexpr('==>').
-is_relation_sexpr('<==>').
-is_relation_sexpr('not').
-is_relation_sexpr(typeGenls).
-
-is_va_relation('or').
-is_va_relation('and').
-%= 	 	 
-
-
-is_exact_symbol(N,_):- \+ atom(N),!,fail.
-is_exact_symbol(N,P):- nonvar(P),!,is_exact_symbol(N,PP),must(P=PP).
-is_exact_symbol(':-',':-').
-is_exact_symbol('?-','?-').
-is_exact_symbol('??',_).
-
-%:- baseKB:ensure_loaded(logicmoo('plarkc/logicmoo_i_cyc_rewriting')).
-
-maybe_var(S,Name,'$VAR'(Name)):- S=='?',atom(Name),!.
-
-%% sexpr_sterm_to_pterm( ?VAR, ?V) is semidet.
-%
-% S-expression Sterm Converted To Pterm.
-%
-sexpr_sterm_to_pterm(VAR,VAR):-is_ftVar(VAR),!.
-sexpr_sterm_to_pterm(S,P):- is_exact_symbol(S,P),!.
-sexpr_sterm_to_pterm('#'(S),P):- is_exact_symbol(S,P),!.
-sexpr_sterm_to_pterm(VAR,'$VAR'(Name)):- atom(VAR),svar(VAR,Name),!.
-% sexpr_sterm_to_pterm(List,PTERM):- append(Left,[S,Name|TERM],List),maybe_var(S,Name,Var),!,append(Left,[Var|TERM],NewList), sexpr_sterm_to_pterm(NewList,PTERM).
-% sexpr_sterm_to_pterm([S|TERM],dot_holds(PTERM)):- \+ (is_list(TERM)),sexpr_sterm_to_pterm_list([S|TERM],PTERM),!.
-%sexpr_sterm_to_pterm([S|TERM],PTERM):- \+ atom(S),sexpr_sterm_to_pterm_list([S|TERM],PTERM),!.
-/*
-sexpr_sterm_to_pterm([S,Vars|TERM],PTERM):- nonvar(S),
-   call_if_defined(common_logic_snark:is_quantifier(S)),
-   must_det_l((sexpr_sterm_to_pterm_list(TERM,PLIST),
-   PTERM=..[S,Vars|PLIST])),!.
-*/
-sexpr_sterm_to_pterm([S|TERM],PTERM):- !, sexpr_sterm_to_pterm_list([S|TERM],PLIST),s_univ(PTERM,PLIST),!.
-sexpr_sterm_to_pterm(VAR,VAR).
-
-
-
-%sexpr_sterm_to_pterm([S|TERM],PTERM):- (number(S);  (atom(S),fail,atom_concat(_,'Fn',S))),sexpr_sterm_to_pterm_list([S|TERM],PTERM),!.            
-%sexpr_sterm_to_pterm([S],O):- is_ftVar(S),sexpr_sterm_to_pterm(S,Y),!,s_univ(O,[Y]),!.
-%sexpr_sterm_to_pterm([S],O):- nonvar(S),sexpr_sterm_to_pterm(S,Y),!,s_univ(O,[Y]),!.
-%sexpr_sterm_to_pterm([S|TERM],PTERM):- is_ftVar(S), sexpr_sterm_to_pterm_list(TERM,PLIST),s_univ(PTERM,[t,S|PLIST]),!.
-%sexpr_sterm_to_pterm([S|TERM],PTERM):- \+ atom(S), sexpr_sterm_to_pterm_list(TERM,PLIST),s_univ(PTERM,[t,S|PLIST]),!.
-%sexpr_sterm_to_pterm([S|TERM],PTERM):- S==and,!,must_det_l((maplist(sexpr_sterm_to_pterm,TERM,PLIST),list_to_conjuncts(',',PLIST,PTERM))).
-% sexpr_sterm_to_pterm([S|TERM],PTERM):- is_va_relation(S),!,must_det_l((maplist(sexpr_sterm_to_pterm,TERM,PLIST),list_to_conjuncts(S,PLIST,PTERM))).
-%sexpr_sterm_to_pterm([S|TERM],PTERM):- is_relation_sexpr(S),must_det_l((sexpr_sterm_to_pterm_list(TERM,PLIST),PTERM=..[S|PLIST])),!.
-%sexpr_sterm_to_pterm(STERM,PTERM):- STERM=..[S|TERM],sexpr_sterm_to_pterm_list(TERM,PLIST),s_univ(PTERM,[S|PLIST]),!.
-
-
-s_univ(P,[F|ARGS]):- atom(F),is_list(ARGS),length(ARGS,A),l_arity(F,A),P=..[F|ARGS].
-s_univ(P,[F|ARGS]):- atom(F),is_list(ARGS),P=..[F|ARGS].
-s_univ(P,S):-P=S.
-
-l_arity(F,A):- clause_b(arity(F,A)).
-l_arity(function,1).
-l_arity(quote,1).
-l_arity('$BQ',1).
-l_arity(F,A):-current_predicate(F/A).
-l_arity(_,1).
-
-%% sexpr_sterm_to_pterm_list( ?VAR, ?VAR) is semidet.
-%
-% S-expression Converted To Pterm List.
-%
-
-sexpr_sterm_to_pterm_list(TERM,PTERMO):- is_list(TERM),append(BEFORE,[VAR],TERM),atom(VAR),
-  atom_concat('@',RVAR,VAR),non_empty_atom(RVAR),svar_fixvarname(RVAR,V),!,append(BEFORE,'$VAR'(V),PTERM),
-  sexpr_sterm_to_pterm_list0(PTERM,PTERMO).
-sexpr_sterm_to_pterm_list(TERM,PTERM):- sexpr_sterm_to_pterm_list0(TERM,PTERM).
-
-sexpr_sterm_to_pterm_list0(VAR,VAR):-is_ftVar(VAR),!.
-sexpr_sterm_to_pterm_list0([],[]):-!.
-sexpr_sterm_to_pterm_list0([S|STERM],[P|PTERM]):-sexpr_sterm_to_pterm(S,P),sexpr_sterm_to_pterm_list0(STERM,PTERM),!.
-sexpr_sterm_to_pterm_list0(VAR,VAR).
-
-
-/*===================================================================
-% input_to_forms/3 does less consistancy checking then conv_to_sterm
-
-Always a S-Expression: 'WFFOut' placing variables in 'VARSOut'
-
-|?-input_to_forms(`(isa a b)`,Clause,Vars).
-Clause = [isa,a,b]
-Vars = _h70
-
-| ?- input_to_forms(`(isa a (b))`,Clause,Vars).
-Clause = [isa,a,[b]]
-Vars = _h70
-
-|?-input_to_forms(`(list a b )`,Clause,Vars)
-Clause = [list,a,b]
-Vars = _h70
-
-?- input_to_forms_debug("(=> (isa ?NUMBER ImaginaryNumber) (exists (?REAL) (and (isa ?REAL RealNumber) (equal ?NUMBER (MultiplicationFn ?REAL (SquareRootFn -1))))))").
-
-?- input_to_forms_debug("(=> (isa ?PROCESS DualObjectProcess) (exists (?OBJ1 ?OBJ2) (and (patient ?PROCESS ?OBJ1) (patient ?PROCESS ?OBJ2) (not (equal ?OBJ1 ?OBJ2)))))").
-
-
-| ?- input_to_forms(`(genlMt A ?B)`,Clause,Vars).
-Clause = [genlMt,'A',_h998]
-Vars = [=('B',_h998)|_h1101]
-
-| ?- input_to_forms(`
- (goals Iran  (not   (exists   (?CITIZEN)   
-  (and    (citizens Iran ?CITIZEN)    (relationExistsInstance maleficiary ViolentAction ?CITIZEN)))))`
- ).
-
-Clause = [goals,Iran,[not,[exists,[_h2866],[and,[citizens,Iran,_h2866],[relationExistsInstance,maleficiary,ViolentAction,_h2866]]]]]
-Vars = [=(CITIZEN,_h2866)|_h3347]
-
-| ?- input_to_forms_debug(`
-(queryTemplate-Reln QuestionTemplate definitionalDisplaySentence 
-       (NLPatternList 
-           (NLPattern-Exact "can you") 
-           (RequireOne 
-               (NLPattern-Word Acquaint-TheWord Verb) 
-               (NLPattern-Word Tell-TheWord Verb)) 
-           (RequireOne 
-               (NLPattern-Exact "me with") 
-               (NLPattern-Exact "me what")) 
-           (OptionalOne 
-               (WordSequence "the term") "a" "an") 
-           (NLPattern-Template NPTemplate :THING) 
-           (OptionalOne "is" ) 
-           (OptionalOne TemplateQuestionMarkMarker)) 
-       (definitionalDisplaySentence :THING ?SENTENCE)) `
-).
-
-| ?- input_to_forms_debug(`
- (#$STemplate #$bioForProposal-short 
-  (#$NLPatternList (#$NLPattern-Template #$NPTemplate :ARG1) 
-   (#$NLPattern-Exact "short bio for use in proposals" ) (#$NLPattern-Word #$Be-TheWord #$Verb) 
-      (#$NLPattern-Exact "") (#$NLPattern-Template #$NPTemplate :ARG2)) (#$bioForProposal-short :ARG1 :ARG2))`
- ).
- 
-input_to_forms_debug("(=> (disjointDecomposition ?CLASS @ROW) (forall (?ITEM1 ?ITEM2) (=> (and (inList ?ITEM1 (ListFn @ROW)) (inList ?ITEM2 (ListFn @ROW)) (not (equal ?ITEM1 ?ITEM2))) (disjoint ?ITEM1 ?ITEM2))))").
-
-
-input_to_forms_debug(
-`
- (#$STemplate #$bioForProposal-short 
-  (#$NLPatternList (#$NLPattern-Template #$NPTemplate :ARG1) 
-   (#$NLPattern-Exact "short bio for use in proposals" ) (#$NLPattern-Word #$Be-TheWord #$Verb) 
-      (#$NLPattern-Exact "") (#$NLPattern-Template #$NPTemplate :ARG2)) (#$bioForProposal-short :ARG1 :ARG2)) `
- ).
-
-% txt_to_codes("(documentation Predicate EnglishLanguage \"A &%Predicate is a sentence-forming &%Relation. Each tuple in the &%Relation is a finite, ordered sequence of objects. The fact that a particular tuple is an element of a &%Predicate is denoted by '(*predicate* arg_1 arg_2 .. arg_n)', where the arg_i are the objects so related. In the case of &%BinaryPredicates, the fact can be read as `arg_1 is *predicate* arg_2' or `a *predicate* of arg_1 is arg_2'.\")",X).
-input_to_forms_debug("(documentation Predicate EnglishLanguage \"A &%Predicate is a sentence-forming &%Relation. Each tuple in the &%Relation is a finite, ordered sequence of objects. The fact that a particular tuple is an element of a &%Predicate is denoted by '(*predicate* arg_1 arg_2 .. arg_n)', where the arg_i are the objects so related. In the case of &%BinaryPredicates, the fact can be read as `arg_1 is *predicate* arg_2' or `a *predicate* of arg_1 is arg_2'.\")",X,Y).
-
-// ==================================================================== */
-:- export(current_input_to_forms/2).
-
-%= 	 	 
-
-%% input_to_forms( ?FormsOut, ?Vars) is semidet.
-%
-% Input Converted To Forms.
-%
-current_input_to_forms(FormsOut,Vars):- 
-    current_input(In),
-    input_to_forms(In, FormsOut,Vars).
-
-
-% input_to_forms_debug(String):- sumo_to_pdkb(String,Wff),wdmsg(Wff),!.
-input_to_forms_debug(String):-input_to_forms(String,Wff,Vs),
-  b_setval('$variable_names',Vs),wdmsg(Wff),!.
-
-input_to_forms_debug(String,Decoder):-input_to_forms(String,Wff,Vs),
-  b_setval('$variable_names',Vs),call(Decoder,Wff,WffO),wdmsg(WffO),!.
-
-:- export(input_to_forms/3).
-
-	 	 
-
-:- export(input_to_forms/3).
-
-%% input_to_forms( ?In, ?FormsOut, ?Vars) is semidet.
-%
-% Get Input Converted To Forms.
-%
-input_to_forms(Codes,FormsOut,Vars):- 
-  b_setval('$variable_names',[])-> 
-  input_to_forms0(Codes,FormsOut,Vars) ->
-  nop(set_variable_names_safe(Vars)).
+make_tmpfile_name(Name,Temp):- 
+  atomic_list_concat(List1,'/',Name),atomic_list_concat(List1,'_',Temp1),
+  atomic_list_concat(List2,'.',Temp1),atomic_list_concat(List2,'_',Temp2),
+  atomic_list_concat(List3,'\\',Temp2),atomic_list_concat(List3,'_',Temp3),
+  atom_concat(Temp3,'.tmp',Temp),!.
   
-is_variable_names_safe(Vars):- var(Vars),!.
-is_variable_names_safe([N=V|Vars]):- !,
-   is_name_variable_safe(N,V) -> 
-   is_variable_names_safe(Vars).
-is_variable_names_safe([]).
-
-is_name_variable_safe(N,V):- 
-  ok_var_name(N)-> var(V).
-   
-
-set_variable_names_safe(Vars):-
-  is_variable_names_safe(Vars)->
-  b_setval('$variable_names',Vars); true.
-
-input_to_forms0(Codes,FormsOut,Vars):- 
-    % is_openable(Codes),!,
-    !, parse_sexpr(Codes, Forms0),
-    once((to_untyped(Forms0, Forms1),extract_lvars(Forms1,FormsOut,Vars))).
-input_to_forms0(Forms,FormsOut,Vars):-
-    (to_untyped(Forms, Forms1) ->
-    extract_lvars(Forms1,FormsOut,Vars)-> true),!.
 
 
-/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-    Lisprolog -- Interpreter for a simple Lisp. Written in Prolog.
-    Written Nov. 26th, 2006 by Markus Triska (triska@gmx.at).
-    Public domain code.
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-:- style_check(-singleton).
-:- style_check(-discontiguous).
-% :- style_check(-atom).
-/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-   Parsing
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+:- meta_predicate(with_lisp_translation_cached(+,2,1)).
+:- meta_predicate(maybe_cache_lisp_translation(+,+,2)).
 
+with_lisp_translation_cached(LFile,WithPart2,WithPart1):- 
+   absolute_file_name(LFile,File),
+   make_tmpfile_name(LFile,Temp),
+   maybe_cache_lisp_translation(File,Temp,WithPart2),
+   finish_lisp_translation_cached(File,Temp,WithPart1).
 
-tstl:- tstl('./games/ontologyportal_sumo/Merge.kif'),
-         tstl('./games/ontologyportal_sumo/Translations/relations-en.txt'),
-         tstl('./games/ontologyportal_sumo/english_format.kif'),
-         tstl('./games/ontologyportal_sumo/domainEnglishFormat.kif'),
-         tstl('./games/ontologyportal_sumo/Mid-level-ontology.kif'),
-         !.
+finish_lisp_translation_cached(File,Temp,WithPart1):-
+   load_files([Temp],[qcompile(auto)]),
+   forall(lisp_trans(Part2,File:Line),
+   once((b_setval('$lisp_translation_line',Line),
+         call(WithPart1,Part2)))).
+  
+maybe_cache_lisp_translation(File,Temp,_):- \+ file_needs_rebuilt(Temp,File),!.
+maybe_cache_lisp_translation(File,Temp,WithPart2):- 
+ setup_call_cleanup(open(Temp,write,Outs),
+  must_det((format(Outs,'~N~q.~n',[:- multifile(lisp_trans/2)]),
+            format(Outs,'~N~q.~n',[:- dynamic(lisp_trans/2)]),
+            format(Outs,'~N~q.~n',[:- style_check(-singleton)]),
+            with_lisp_translation(File,write_trans(Outs,File,WithPart2)))),
+  ignore(catch(close(Outs),_,true))),!.
+  
 
-writeqnl(O):-writeq(O),nl.
-
+write_trans(Outs,File,WithPart2,Lisp):-
+   must_det((call(WithPart2,Lisp,Part),
+   b_getval('$lisp_translation_line',Line),
+   format(Outs,'~N~q.~n',[lisp_trans(Part,File:Line)]))),!.
 
 /* alternate method*/
 phrase_from_stream_partial(Grammar, In):-
@@ -332,11 +112,7 @@ lazy_forgotten(In,UnUsed,UnUsed):-
 tstl(I):- with_lisp_translation(I,writeqnl).
 
 supports_seek(In):- catch(stream_property(In,reposition(true)),_,fail).
-/*
-supports_seek(In):- stream_property(In,file(_)),!.
-supports_seek(In):- notrace(( catch((catch((seek(In, 1, current, _),seek(In, -1, current, _)),
-  error(permission_error(reposition, stream, _), _Ctx),fail)),error(_,_),true))).
-*/
+% supports_seek(In):- notrace(( catch((catch((seek(In, 1, current, _),seek(In, -1, current, _)),error(permission_error(reposition, stream, _), _Ctx),fail)),error(_,_),true))).
 
 phrase_from_stream_eof(Grammar, _):- Grammar=end_of_file,!.
 phrase_from_stream_eof(Grammar, _):- term_variables(Grammar,[end_of_file]),!.
@@ -359,7 +135,7 @@ phrase_from_stream_lazy_part(Grammar, In):-
        length(More,UnUsed),!,
        (Offset is Used - UnUsed + Prev),!,
        % dmsg((Offset is Used - UnUsed + Prev)) ->
-       seek(In,Offset,bof,NewPos))),!.
+       seek(In,Offset,bof,_NewPos))),!.
 
 phrase_from_pending_stream(Grammar, In):-
    un_fake_buffer_codes(In,CodesPrev),
@@ -400,19 +176,10 @@ charvar(C):- integer(C)-> true; (writeln(charvar(C)),break,fail).
 
 %= 	 	 
 
-%% parse_sexpr( :TermS, ?Expr) is semidet.
+%% parse_sexpr( :TermS, -Expr) is det.
 %
 % Parse S-expression.
 %
-
-parse_sexpr_str(S,Expr):- nb_setval('$maybe_string',t),parse_sexpr(string(S), Expr),nb_setval('$maybe_string',[]).
-
-parse_sexpr_stream(S,Expr):- 
-  catch(
-    phrase_from_stream_part(file_sexpr(Expr),S),
-    at_end_of_stream(S),
-    Expr=end_of_file),!.
-
 parse_sexpr(S, Expr) :- is_stream(S),!,parse_sexpr_stream(S,Expr).
 parse_sexpr(string(String), Expr) :- !,txt_to_codes(String,Codes),!,parse_sexpr_ascii(Codes, Expr).
 parse_sexpr(atom(String), Expr) :- !,txt_to_codes(String,Codes),!,parse_sexpr_ascii(Codes, Expr).
@@ -428,26 +195,45 @@ txt_to_codes([C|Text],[C|Text]):- integer(C),is_list(Text),!.
 % txt_to_codes([C|Text],_):- atom(C),atom_length(C,1),!,throw(txt_to_codes([C|Text])).
 txt_to_codes(Text,Codes):- catch((text_to_string(Text,String),!,string_codes(String,Codes)),_,fail).
 
-%% parse_sexpr_ascii( ?Codes, ?Expr) is semidet.
+%% parse_sexpr_ascii( +Codes, -Expr) is det.
 %
 % Parse S-expression Codes.
 %
 parse_sexpr_ascii(S, Expr) :- is_stream(S),!,parse_sexpr_stream(S,Expr),!.
 parse_sexpr_ascii(Text, Expr) :- txt_to_codes(Text,Codes), !, phrase(file_sexpr(Expr), Codes, []),!.
 
+%% parse_sexpr_string( +Codes, -Expr) is det.
+%
+% Parse S-expression That maybe sees string from Codes.
+%
+parse_sexpr_string(S,Expr):- nb_setval('$maybe_string',t),parse_sexpr(string(S), Expr),nb_setval('$maybe_string',[]).
+
+%% parse_sexpr_stream( +Stream, -Expr) is det.
+%
+% Parse S-expression from a Stream
+%
+parse_sexpr_stream(S,Expr):- 
+  catch(
+    phrase_from_stream_part(file_sexpr(Expr),S),
+    at_end_of_stream(S),
+    Expr=end_of_file),!.
+
+
 :- export(file_sexpr//1).
 :- export(sexpr//1).
 
 % Use DCG for parser.
 
+one_blank --> [C],{integer(C),!,C =< 32}.
 sexpr_dcgPeek(Grammer,List,List):- phrase(Grammer,List,_).
 sexpr_dcgUnless(Grammer,List,List):- \+ phrase(Grammer,List,_).
 
 file_sexpr(end_of_file,I,O):- I==end_of_file,!,O=[].
+file_sexpr(end_of_file) --> [X],{ var(X), X = -1},!.
 file_sexpr(end_of_file) --> [X],{ attvar(X), X = -1},!.
 file_sexpr(end_of_file) --> [X],{ attvar(X), X = end_of_file},!.
 file_sexpr('$COMMENT'(Expr)) --> line_comment(Expr),!.
-% WANT? file_sexpr(O) --> one_blank,!,file_sexpr(O).
+file_sexpr('$COMMENT'(Txt)) --> `#|`, !, read_string_until(S,`|#`), swhite,{text_to_string(S,Txt)}.
 file_sexpr('$COMMENT'([])) --> sblank_lines,!.
 
 %   0.0003:   (PICK-UP ANDY IBM-R30 CS-LOUNGE) [0.1000]
@@ -458,19 +244,34 @@ file_sexpr('#+'(C,O)) --> `#+`,!,sexpr(C),swhite,!,file_sexpr(O).
 % file_sexpr(Term,Left,Right):- eoln(EOL),append(LLeft,[46,EOL|Right],Left),read_term_from_codes(LLeft,Term,[double_quotes(string),syntax_errors(fail)]),!.
 % file_sexpr(Term,Left,Right):- append(LLeft,[46|Right],Left), ( \+ member(46,Right)),read_term_from_codes(LLeft,Term,[double_quotes(string),syntax_errors(fail)]),!.
 
+file_sexpr(Expr) --> sexpr_dcgPeek(`(`),!,sexpr(Expr),!.
+
+file_sexpr(Expr) --> {fail}, sexpr_lazy_list_character_count(Location,Stream),
+  {break,
+   seek(Stream,Location,bof,_),   
+   read_clause(Stream,Expr,[cycles(true),double_quotes(string),variable_names(Vars)]),
+   implode_threse_vars(Vars)},!.
+
+% WANT? 
+file_sexpr(O) --> one_blank,!,file_sexpr(O).
 file_sexpr(Expr) --> sexpr(Expr),!.
-% Want? file_sexpr(Expr) --> sexpr(Expr),!,swhite.
-% file_sexpr(_) --> [_|_],!,{fail}.
+
 file_sexpr(end_of_file) --> [].
 
-%%  sexpr(L)// is semidet.
+implode_threse_vars([N='$VAR'(N)|Vars]):-!, implode_threse_vars(Vars).
+implode_threse_vars([]).
+
+%%  sexpr(L)// is det.
 %
 sexpr(L)                      --> sblank,!,sexpr(L),!.
 sexpr(L)                      --> `(`, !, swhite, sexpr_list(L),!, swhite.
+sexpr((Expr))                 --> `{`, !, read_string_until(S,`}.`),!, swhite,
+  {read_term_from_codes(S,Expr,[cycles(true),module(baseKB),double_quotes(string),variable_names(Vars)]),implode_threse_vars(Vars)}.
+
 sexpr('$OBJ'(vector,V))                 --> `#(`, !, sexpr_vector(V,`)`),!, swhite,!.
 sexpr('$OBJ'(vugly,V))                 --> `#<`, sexpr_vector(V,`>`),!, swhite.
-sexpr('$OBJ'(brack_vector,V))                 --> `[`, sexpr_vector(V,`]`),!, swhite.
 sexpr('$OBJ'(ugly,V))                 --> `#<`, read_string_until(V,`>`),!, swhite.
+sexpr('$OBJ'(brack_vector,V))                 --> `[`, sexpr_vector(V,`]`),!, swhite.
 sexpr('?'(E))              --> `?`, sexpr_dcgPeek(([C],{sym_char(C)})),!, rsymbol('?',E), swhite.
 sexpr('#'(t))                 --> `#t`, !, swhite.
 sexpr('#'(f))                 --> `#f`, !, swhite.
@@ -508,17 +309,31 @@ sblank --> line_comment(_),!.
 sblank_lines --> eoln, !.
 sblank_lines --> one_blank, !, sblank_lines.
 
-one_blank --> [C],{charvar(C),!,C =< 32}.
 */
 
 swhite --> sblank,!.
 swhite --> [].
 
 
+sexpr_lazy_list_character_count(Location, Stream, Here, Here) :-
+	sexpr_lazy_list_character_count(Here, Location, Stream).
+
+sexpr_lazy_list_character_count(Here, CharNo, Stream) :-
+	'$skip_list'(Skipped, Here, Tail),
+	(   attvar(Tail)
+	->  frozen(Tail,
+		   pure_input:read_to_input_stream(Stream, _PrevPos, Pos, _List)),
+	    stream_position_data(char_count, Pos, EndRecordCharNo),
+	    CharNo is EndRecordCharNo - Skipped
+	;   Tail == []
+	->  CharNo = end_of_file-Skipped
+	;   type_error(lazy_list, Here)
+	).
+
 
 %= 	 	 
 
-%% eoln( ?AsciiCode) is semidet.
+%% eoln( ?AsciiCode) is det.
 %
 % Eoln.
 %
@@ -599,7 +414,7 @@ cdigit(46) --> `.`.
 
 %= 	 	 
 
-%% sexpr( ?E, ?C, ?X, ?Z) is semidet.
+%% sexpr( ?E, ?C, ?X, ?Z) is det.
 %
 % S-Expression.
 %
@@ -609,7 +424,7 @@ sexpr(E,C,X,Z) :- swhite([C|X],Y), sexpr(E,Y,Z).
 
 %= 	 	 
 
-%% sym_char( ?C) is semidet.
+%% sym_char( ?C) is det.
 %
 % Sym Char.  (not ";()#',` 
 % )
@@ -625,7 +440,7 @@ sym_char(C) :- bx(C >  32), \+ (member(C,[34,59,40,41,35,39,44,96])).
 
 %= 	 	 
 
-%% to_unbackquote( ?I, ?O) is semidet.
+%% to_unbackquote( ?I, ?O) is det.
 %
 % Converted To Unbackquote.
 %
@@ -635,7 +450,7 @@ to_unbackquote(I,O):-to_untyped(I,O).
 
 %= 	 	 
 
-%% to_untyped( :TermVar, :TermName) is semidet.
+%% to_untyped( :TermVar, :TermName) is det.
 %
 % Converted To Untyped.
 %
@@ -644,7 +459,7 @@ to_untyped([],[]):-!.
 to_untyped('?'(S),_):- S=='??',!.
 % to_untyped('?'(S),'$VAR'('_')):- S=='??',!.
 to_untyped(VAR,NameU):-atomic(VAR),atom_concat('#$',NameU,VAR),!.
-%to_untyped(S,s(L)):- string(S),atom_contains(S,' '),atomic_list_concat(['(',S,')'],O),parse_sexpr_str(O,L),!.
+%to_untyped(S,s(L)):- string(S),atom_contains(S,' '),atomic_list_concat(['(',S,')'],O),parse_sexpr_string(O,L),!.
 to_untyped(S,S):- string(S),!.
 to_untyped(S,S):- number(S),!.
 %to_untyped(S,O):- atom(S),catch(atom_number(S,O),_,fail),!.
@@ -664,7 +479,7 @@ to_untyped('$NUMBER'(S),'$NUMBER'(S)):-!.
 % to_untyped([[]],[]):-!.
 to_untyped('$STR'(Expr),Forms):- (text_to_string_safe(Expr,Forms);to_untyped(Expr,Forms)),!.
 to_untyped(['#'(Backquote),Rest],Out):- Backquote == backquote, !,to_untyped(['#'('$BQ'),Rest],Out).
-to_untyped(['#'(S)|Rest],Out):- nonvar(S), is_list(Rest),must_maplist(to_untyped,[S|Rest],[F|Mid]), 
+to_untyped(['#'(S)|Rest],OOut):- nonvar(S), is_list(Rest),must_maplist(to_untyped,[S|Rest],[F|Mid]), 
           ((atom(F),t_l:s2p(F))-> Out=..[F|Mid];Out=[F|Mid]),
           to_untyped(Out,OOut).
 % to_untyped([H|T],Forms):-is_list([H|T]),must(text_to_string_safe([H|T],Forms);maplist(to_untyped,[H|T],Forms)).
@@ -688,7 +503,7 @@ char_code_from_name(Str,Code):-find_from_name(Str,Code),!.
 char_code_from_name(Str,Code):-text_upper(Str,StrU),find_from_name2(StrU,Code).
 char_code_from_name(Str,Code):-string_codes(Str,[S,H1,H2,H3,H4|HEX]),memberchk(S,`Uu`),char_type(H4,xdigit(_)),
    catch(read_from_codes([48, 120,H1,H2,H3,H4|HEX],Code),_,fail).
-char_code_from_name(Str,Code):-string_codes(Str,[S,H1|BASE10]),memberchk(S,`nd`),char_type(H2,digit),
+char_code_from_name(Str,Code):-string_codes(Str,[S,H1|BASE10]),memberchk(S,`nd`),char_type(H1,digit),
    catch(read_from_codes([H1|BASE10],Code),_,fail).
 
 find_from_name(Str,Code):-string_codes(Str,Chars),lisp_code_name_extra(Code,Chars).
@@ -722,7 +537,7 @@ lisp_code_name_extra(7,`bell`).
 */
     	 
 
-%% remove_incompletes( :TermN, :TermCBefore) is semidet.
+%% remove_incompletes( :TermN, :TermCBefore) is det.
 %
 % Remove Incompletes.
 %
@@ -736,7 +551,7 @@ remove_incompletes([NV|Before],[NV|CBefore]):-
 
 %= 	 	 
 
-%% extract_lvars( ?A, ?B, ?After) is semidet.
+%% extract_lvars( ?A, ?B, ?After) is det.
 %
 % Extract Lvars.
 %
@@ -749,7 +564,7 @@ extract_lvars(A,B,After):-
 
 %= 	 	 
 
-%% copy_lvars( :TermVAR, ?Vars, :TermNV, ?NVars) is semidet.
+%% copy_lvars( :TermVAR, ?Vars, :TermNV, ?NVars) is det.
 %
 % Copy Lvars.
 %
@@ -770,7 +585,7 @@ copy_lvars(Term,Vars,NTerm,NVars):-
 
 %= 	 	 
 
-%% svar( ?Var, ?NameU) is semidet.
+%% svar( ?Var, ?NameU) is det.
 %
 % If this is a KIF var, convert to a name for prolog
 %
@@ -791,7 +606,7 @@ svar(VAR,Name):-atom(VAR),atom_concat('?',A,VAR),non_empty_atom(A),svar_fixvarna
 
 %= 	 	 
 
-%% svar_fixvarname( ?SVARIN, ?UP) is semidet.
+%% svar_fixvarname( ?SVARIN, ?UP) is det.
 %
 % Svar Fixvarname.
 %
@@ -809,7 +624,7 @@ svar_fixname('??','_'):-!.
 svar_fixname(QA,AU):-atom_concat('??',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO),atom_concat('_',AO,AU).
 svar_fixname(QA,AO):-atom_concat('?',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO).
 svar_fixname(QA,AO):-atom_concat('@',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO).
-svar_fixname(NameU,NameUO):-atom_concat('_',Name,NameU),non_empty_atom(Name),atom_number(Name,_),!.
+svar_fixname(NameU,NameU):-atom_concat('_',Name,NameU),non_empty_atom(Name),atom_number(Name,_),!.
 svar_fixname(NameU,NameUO):-atom_concat('_',Name,NameU),non_empty_atom(Name), \+ atom_number(Name,_),!,svar_fixvarname(Name,NameO),atom_concat('_',NameO,NameUO).
 svar_fixname(I,O):-  
  must_det_l((
@@ -822,7 +637,7 @@ svar_fixname(I,O):-
 
 %= 	 	 
 
-%% fix_varcase( ?I, ?O) is semidet.
+%% fix_varcase( ?I, ?O) is det.
 %                                                               
 % Fix Varcase.
 %
@@ -835,14 +650,14 @@ fix_varcase(Word,Word). % mixed case
 
 :- export(ok_varname_or_int/1).
 
-%% ok_varname_or_int( ?Name) is semidet.
+%% ok_varname_or_int( ?Name) is det.
 %
 % Ok Varname.
 %
 ok_varname_or_int(Name):- atom(Name),!,ok_var_name(Name).
 ok_varname_or_int(Name):- number(Name).
 
-%% ok_var_name( ?Name) is semidet.
+%% ok_var_name( ?Name) is det.
 %
 % Ok Varname.
 %
@@ -861,7 +676,7 @@ ok_var_name(Name):-
 
 %= 	 	 
 
-%% atom_upper( ?A, ?U) is semidet.
+%% atom_upper( ?A, ?U) is det.
 %
 % Atom Upper.
 %
@@ -870,7 +685,7 @@ atom_upper(A,U):-string_upper(A,S),atom_string(U,S).
 
 %= 	 	 
 
-%% lisp_read_from_input( ?Forms) is semidet.
+%% lisp_read_from_input( ?Forms) is det.
 %
 % Lisp Read Converted From Input.
 %
@@ -878,12 +693,12 @@ lisp_read_from_input(Forms):-lisp_read_from_stream(current_input,Forms),!.
 
 %= 	 	 
 
-%% lisp_read_from_stream( ?I, ?Forms) is semidet.
+%% lisp_read_from_stream( ?I, ?Forms) is det.
 %
 % Lisp Read Converted From Input.
 %
 lisp_read_from_stream(In,Forms):- is_stream(In), at_end_of_stream(In),!,end_of_file=Forms.
-lisp_read_from_stream(AsciiCodesList,FormsOut):- \+ is_stream(AsciiCodesList),
+lisp_read_from_stream(AsciiCodesList,Forms):- \+ is_stream(AsciiCodesList),
     parse_sexpr(AsciiCodesList, Forms0),!,must(to_untyped(Forms0,Forms)).
 lisp_read_from_stream(In,Forms):- 
  stream_source_typed(In,Type),!,
@@ -892,7 +707,7 @@ lisp_read_from_stream(In,Forms):-
 
 %= 	 	 
 
-%% stream_source_typed( ?I, ?Expr) is semidet.
+%% stream_source_typed( ?I, -Expr) is det.
 %
 % Stream Source Typed.
 %
@@ -906,7 +721,7 @@ stream_source_typed(In,Expr):- fail,
 
 %= 	 	 
 
-%% lowcase( :TermC1, :TermC2) is semidet.
+%% lowcase( :TermC1, :TermC2) is det.
 %
 % Lowcase.
 %
@@ -916,7 +731,7 @@ lowcase([C1|T1],[C2|T2]) :- lowercase(C1,C2), lowcase(T1,T2).
 
 %= 	 	 
 
-%% lowercase( ?C1, ?C2) is semidet.
+%% lowercase( ?C1, ?C2) is det.
 %
 % Lowercase.
 %
@@ -942,7 +757,7 @@ lowercase(C,C).
 
 %= 	 	 
 
-%% codelist_to_forms( ?AsciiCodesList, ?FormsOut) is semidet.
+%% codelist_to_forms( ?AsciiCodesList, ?FormsOut) is det.
 %
 % Codelist Converted To Forms.
 %
@@ -953,7 +768,7 @@ codelist_to_forms(AsciiCodesList,FormsOut):-
 
 %= 	 	 
 
-%% run( ?Program, ?Values) is semidet.
+%% run( ?Program, ?Values) is det.
 %
 % Run.
 %
@@ -968,7 +783,7 @@ run(Program, Values) :-
 
 %= 	 	 
 
-%% unfunc( :TermS, :TermS) is semidet.
+%% unfunc( :TermS, :TermS) is det.
 %
 % Unfunc.
 %
@@ -981,7 +796,7 @@ unfunc([Q0|Qs0], [Q|Qs]) :- unfunc(Q0, Q), unfunc(Qs0, Qs).
 
 %= 	 	 
 
-%% fold( :TermARG1, ?VALUE2, ?V, ?V) is semidet.
+%% fold( :TermARG1, ?VALUE2, ?V, ?V) is det.
 %
 % Fold.
 %
@@ -991,7 +806,7 @@ fold(['$NUMBER'(F)|Fs], Op, V0, V) :- E =.. [Op,V0,F], V1 is E, fold(Fs, Op, V1,
 
 %= 	 	 
 
-%% compile_all( ?Fs0, ?Fs) is semidet.
+%% compile_all( ?Fs0, ?Fs) is det.
 %
 % Compile All.
 %
@@ -1006,7 +821,7 @@ compile_all(Fs0, Fs) :- maplist(compile, Fs0, Fs).
 
 %= 	 	 
 
-%% compile( ?F0, ?F) is semidet.
+%% compile( ?F0, ?F) is det.
 %
 % Compile.
 %
@@ -1085,7 +900,7 @@ goal_truth(Goal, T) --> { Goal -> T = t ; T = [] }.
 
 %= 	 	 
 
-%% bind_arguments( :TermARG1, :TermARG2, ?Bs, ?Bs) is semidet.
+%% bind_arguments( :TermARG1, :TermARG2, ?Bs, ?Bs) is det.
 %
 % Bind Arguments.
 %
@@ -1097,7 +912,7 @@ bind_arguments([A|As], [V|Vs], Bs0, Bs) :-
 
 %= 	 	 
 
-%% run( ?S) is semidet.
+%% run( ?S) is det.
 %
 % Run.
 %
@@ -1109,7 +924,7 @@ run(S):-'format'('~n~s~n',[S]),run(S,V),writeq(V).
 
 %= 	 	 
 
-%% if_script_file_time( :GoalX) is semidet.
+%% if_script_file_time( :GoalX) is det.
 %
 % If Script File Time.
 %
@@ -1118,7 +933,7 @@ if_script_file_time(X):-if_startup_script_local((X)).
 
 %= 	 	 
 
-%% if_startup_script_local( ?VALUE1) is semidet.
+%% if_startup_script_local( ?VALUE1) is det.
 %
 % If Startup Script Local.
 %
@@ -1228,66 +1043,286 @@ process_rff(CU,OnFirst,OnRetry,OnSuccess,OnFailure):-
 
 */
 
-% % UNDO % :- add_import_module(baseKB,sexpr_reader,end).
 
-read_pending_whitespace(In):- repeat, peek_char(In,Code),
-   (( \+ char_type(Code,space), \+ char_type(Code,white))-> ! ; (get_char(In,_),fail)).
+/*
+:- prolog_load_context(directory,Dir),
+   DirFor = plarkc,
+   (( \+ user:file_search_path(DirFor,Dir)) ->asserta(user:file_search_path(DirFor,Dir));true),
+   absolute_file_name('../../../../',Y,[relative_to(Dir),file_type(directory)]),
+   (( \+ user:file_search_path(pack,Y)) ->asserta(user:file_search_path(pack,Y));true).
+:- attach_packs.
+:- initialization(attach_packs).
+*/
+
+% [Required] Load the Logicmoo Library Utils
+% = % :- ensure_loaded(logicmoo(logicmoo_utils)).
+
+% % :- ensure_loaded(logicmoo(plarkc/mpred_cyc_api)).
 
 
-temp_file_for(Name,Temp):- 
-  atomic_list_concat(List1,'/',Name),atomic_list_concat(List1,'_',Temp1),
-  atomic_list_concat(List2,'.',Temp1),atomic_list_concat(List2,'_',Temp2),
-  atomic_list_concat(List3,'\\',Temp2),atomic_list_concat(List3,'_',Temp3),
-  atom_concat(Temp3,'.tmp',Temp),!.
+:- export(fixvars/4).
+
+%= 	 	 
+
+%% fixvars( ?P, ?VALUE2, :TermARG3, ?P) is det.
+%
+% Fixvars.
+%
+fixvars(P,_,[],P):-!.
+fixvars(P,N,[V|VARS],PO):-  
+     atom_string(Name,V),svar_fixvarname(Name,NB),Var = '$VAR'(NB),
+     subst(P,'$VAR'(N),Var,PM0),
+     subst(PM0,'$VAR'(Name),Var,PM),
+   %  (get_varname_list(Vs)->true;Vs=[]),
+  %   append(Vs,[Name=Var],NVs),
+  %   nput_variable_names( NVs),
+     N2 is N + 1, fixvars(PM,N2,VARS,PO).
+
+
+
+
+non_empty_atom(A1):- atom(A1),atom_length(A1,AL),!,AL>0.
+
+:- meta_predicate(sexpr_sterm_to_pterm(?,?)).
+:- meta_predicate(sexpr_sterm_to_pterm_list(?,?)).
+
+is_relation_sexpr('=>').
+is_relation_sexpr('<=>').
+is_relation_sexpr('==>').
+is_relation_sexpr('<==>').
+is_relation_sexpr('not').
+is_relation_sexpr(typeGenls).
+
+is_va_relation('or').
+is_va_relation('and').
+%= 	 	 
+
+
+is_exact_symbol(N,_):- \+ atom(N),!,fail.
+is_exact_symbol(N,P):- nonvar(P),!,is_exact_symbol(N,PP),must(P=PP).
+is_exact_symbol(':-',':-').
+is_exact_symbol('?-','?-').
+is_exact_symbol('??',_).
+
+%:- baseKB:ensure_loaded(logicmoo('plarkc/logicmoo_i_cyc_rewriting')).
+
+maybe_var(S,Name,'$VAR'(Name)):- S=='?',atom(Name),!.
+
+%% sexpr_sterm_to_pterm( ?VAR, ?V) is det.
+%
+% S-expression Sterm Converted To Pterm.
+%
+sexpr_sterm_to_pterm(VAR,VAR):-is_ftVar(VAR),!.
+sexpr_sterm_to_pterm(S,P):- is_exact_symbol(S,P),!.
+sexpr_sterm_to_pterm('#'(S),P):- is_exact_symbol(S,P),!.
+sexpr_sterm_to_pterm(VAR,'$VAR'(Name)):- atom(VAR),svar(VAR,Name),!.
+% sexpr_sterm_to_pterm(List,PTERM):- append(Left,[S,Name|TERM],List),maybe_var(S,Name,Var),!,append(Left,[Var|TERM],NewList), sexpr_sterm_to_pterm(NewList,PTERM).
+% sexpr_sterm_to_pterm([S|TERM],dot_holds(PTERM)):- \+ (is_list(TERM)),sexpr_sterm_to_pterm_list([S|TERM],PTERM),!.
+%sexpr_sterm_to_pterm([S|TERM],PTERM):- \+ atom(S),sexpr_sterm_to_pterm_list([S|TERM],PTERM),!.
+/*
+sexpr_sterm_to_pterm([S,Vars|TERM],PTERM):- nonvar(S),
+   call_if_defined(common_logic_snark:is_quantifier(S)),
+   must_det_l((sexpr_sterm_to_pterm_list(TERM,PLIST),
+   PTERM=..[S,Vars|PLIST])),!.
+*/
+sexpr_sterm_to_pterm([S|TERM],PTERM):- !, sexpr_sterm_to_pterm_list([S|TERM],PLIST),s_univ(PTERM,PLIST),!.
+sexpr_sterm_to_pterm(VAR,VAR).
+
+
+
+%sexpr_sterm_to_pterm([S|TERM],PTERM):- (number(S);  (atom(S),fail,atom_concat(_,'Fn',S))),sexpr_sterm_to_pterm_list([S|TERM],PTERM),!.            
+%sexpr_sterm_to_pterm([S],O):- is_ftVar(S),sexpr_sterm_to_pterm(S,Y),!,s_univ(O,[Y]),!.
+%sexpr_sterm_to_pterm([S],O):- nonvar(S),sexpr_sterm_to_pterm(S,Y),!,s_univ(O,[Y]),!.
+%sexpr_sterm_to_pterm([S|TERM],PTERM):- is_ftVar(S), sexpr_sterm_to_pterm_list(TERM,PLIST),s_univ(PTERM,[t,S|PLIST]),!.
+%sexpr_sterm_to_pterm([S|TERM],PTERM):- \+ atom(S), sexpr_sterm_to_pterm_list(TERM,PLIST),s_univ(PTERM,[t,S|PLIST]),!.
+%sexpr_sterm_to_pterm([S|TERM],PTERM):- S==and,!,must_det_l((maplist(sexpr_sterm_to_pterm,TERM,PLIST),list_to_conjuncts(',',PLIST,PTERM))).
+% sexpr_sterm_to_pterm([S|TERM],PTERM):- is_va_relation(S),!,must_det_l((maplist(sexpr_sterm_to_pterm,TERM,PLIST),list_to_conjuncts(S,PLIST,PTERM))).
+%sexpr_sterm_to_pterm([S|TERM],PTERM):- is_relation_sexpr(S),must_det_l((sexpr_sterm_to_pterm_list(TERM,PLIST),PTERM=..[S|PLIST])),!.
+%sexpr_sterm_to_pterm(STERM,PTERM):- STERM=..[S|TERM],sexpr_sterm_to_pterm_list(TERM,PLIST),s_univ(PTERM,[S|PLIST]),!.
+
+
+s_univ(P,[F|ARGS]):- atom(F),is_list(ARGS),length(ARGS,A),l_arity(F,A),P=..[F|ARGS].
+s_univ(P,[F|ARGS]):- atom(F),is_list(ARGS),P=..[F|ARGS].
+s_univ(P,S):-P=S.
+
+l_arity(F,A):- clause_b(arity(F,A)).
+l_arity(function,1).
+l_arity(quote,1).
+l_arity('$BQ',1).
+l_arity(F,A):-current_predicate(F/A).
+l_arity(_,1).
+
+%% sexpr_sterm_to_pterm_list( ?VAR, ?VAR) is det.
+%
+% S-expression Converted To Pterm List.
+%
+
+sexpr_sterm_to_pterm_list(TERM,PTERMO):- is_list(TERM),append(BEFORE,[VAR],TERM),atom(VAR),
+  atom_concat('@',RVAR,VAR),non_empty_atom(RVAR),svar_fixvarname(RVAR,V),!,append(BEFORE,'$VAR'(V),PTERM),
+  sexpr_sterm_to_pterm_list0(PTERM,PTERMO).
+sexpr_sterm_to_pterm_list(TERM,PTERM):- sexpr_sterm_to_pterm_list0(TERM,PTERM).
+
+sexpr_sterm_to_pterm_list0(VAR,VAR):-is_ftVar(VAR),!.
+sexpr_sterm_to_pterm_list0([],[]):-!.
+sexpr_sterm_to_pterm_list0([S|STERM],[P|PTERM]):-sexpr_sterm_to_pterm(S,P),sexpr_sterm_to_pterm_list0(STERM,PTERM),!.
+sexpr_sterm_to_pterm_list0(VAR,VAR).
+
+
+/*===================================================================
+% input_to_forms/3 does less consistancy checking then conv_to_sterm
+
+Always a S-Expression: 'WFFOut' placing variables in 'VARSOut'
+
+|?-input_to_forms(`(isa a b)`,Clause,Vars).
+Clause = [isa,a,b]
+Vars = _h70
+
+| ?- input_to_forms(`(isa a (b))`,Clause,Vars).
+Clause = [isa,a,[b]]
+Vars = _h70
+
+|?-input_to_forms(`(list a b )`,Clause,Vars)
+Clause = [list,a,b]
+Vars = _h70
+
+?- input_to_forms_debug("(=> (isa ?NUMBER ImaginaryNumber) (exists (?REAL) (and (isa ?REAL RealNumber) (equal ?NUMBER (MultiplicationFn ?REAL (SquareRootFn -1))))))").
+
+?- input_to_forms_debug("(=> (isa ?PROCESS DualObjectProcess) (exists (?OBJ1 ?OBJ2) (and (patient ?PROCESS ?OBJ1) (patient ?PROCESS ?OBJ2) (not (equal ?OBJ1 ?OBJ2)))))").
+
+
+| ?- input_to_forms(`(genlMt A ?B)`,Clause,Vars).
+Clause = [genlMt,'A',_h998]
+Vars = [=('B',_h998)|_h1101]
+
+| ?- input_to_forms(`
+ (goals Iran  (not   (exists   (?CITIZEN)   
+  (and    (citizens Iran ?CITIZEN)    (relationExistsInstance maleficiary ViolentAction ?CITIZEN)))))`
+ ).
+
+Clause = [goals,Iran,[not,[exists,[_h2866],[and,[citizens,Iran,_h2866],[relationExistsInstance,maleficiary,ViolentAction,_h2866]]]]]
+Vars = [=(CITIZEN,_h2866)|_h3347]
+
+| ?- input_to_forms_debug(`
+(queryTemplate-Reln QuestionTemplate definitionalDisplaySentence 
+       (NLPatternList 
+           (NLPattern-Exact "can you") 
+           (RequireOne 
+               (NLPattern-Word Acquaint-TheWord Verb) 
+               (NLPattern-Word Tell-TheWord Verb)) 
+           (RequireOne 
+               (NLPattern-Exact "me with") 
+               (NLPattern-Exact "me what")) 
+           (OptionalOne 
+               (WordSequence "the term") "a" "an") 
+           (NLPattern-Template NPTemplate :THING) 
+           (OptionalOne "is" ) 
+           (OptionalOne TemplateQuestionMarkMarker)) 
+       (definitionalDisplaySentence :THING ?SENTENCE)) `
+).
+
+| ?- input_to_forms_debug(`
+ (#$STemplate #$bioForProposal-short 
+  (#$NLPatternList (#$NLPattern-Template #$NPTemplate :ARG1) 
+   (#$NLPattern-Exact "short bio for use in proposals" ) (#$NLPattern-Word #$Be-TheWord #$Verb) 
+      (#$NLPattern-Exact "") (#$NLPattern-Template #$NPTemplate :ARG2)) (#$bioForProposal-short :ARG1 :ARG2))`
+ ).
+ 
+input_to_forms_debug("(=> (disjointDecomposition ?CLASS @ROW) (forall (?ITEM1 ?ITEM2) (=> (and (inList ?ITEM1 (ListFn @ROW)) (inList ?ITEM2 (ListFn @ROW)) (not (equal ?ITEM1 ?ITEM2))) (disjoint ?ITEM1 ?ITEM2))))").
+
+
+input_to_forms_debug(
+`
+ (#$STemplate #$bioForProposal-short 
+  (#$NLPatternList (#$NLPattern-Template #$NPTemplate :ARG1) 
+   (#$NLPattern-Exact "short bio for use in proposals" ) (#$NLPattern-Word #$Be-TheWord #$Verb) 
+      (#$NLPattern-Exact "") (#$NLPattern-Template #$NPTemplate :ARG2)) (#$bioForProposal-short :ARG1 :ARG2)) `
+ ).
+
+% txt_to_codes("(documentation Predicate EnglishLanguage \"A &%Predicate is a sentence-forming &%Relation. Each tuple in the &%Relation is a finite, ordered sequence of objects. The fact that a particular tuple is an element of a &%Predicate is denoted by '(*predicate* arg_1 arg_2 .. arg_n)', where the arg_i are the objects so related. In the case of &%BinaryPredicates, the fact can be read as `arg_1 is *predicate* arg_2' or `a *predicate* of arg_1 is arg_2'.\")",X).
+input_to_forms_debug("(documentation Predicate EnglishLanguage \"A &%Predicate is a sentence-forming &%Relation. Each tuple in the &%Relation is a finite, ordered sequence of objects. The fact that a particular tuple is an element of a &%Predicate is denoted by '(*predicate* arg_1 arg_2 .. arg_n)', where the arg_i are the objects so related. In the case of &%BinaryPredicates, the fact can be read as `arg_1 is *predicate* arg_2' or `a *predicate* of arg_1 is arg_2'.\")",X,Y).
+
+// ==================================================================== */
+:- export(current_input_to_forms/2).
+
+%= 	 	 
+
+%% input_to_forms( ?FormsOut, ?Vars) is det.
+%
+% Input Converted To Forms.
+%
+current_input_to_forms(FormsOut,Vars):- 
+    current_input(In),
+    input_to_forms(In, FormsOut,Vars).
+
+
+% input_to_forms_debug(String):- sumo_to_pdkb(String,Wff),wdmsg(Wff),!.
+input_to_forms_debug(String):-input_to_forms(String,Wff,Vs),
+  b_setval('$variable_names',Vs),wdmsg(Wff),!.
+
+input_to_forms_debug(String,Decoder):-input_to_forms(String,Wff,Vs),
+  b_setval('$variable_names',Vs),call(Decoder,Wff,WffO),wdmsg(WffO),!.
+
+:- export(input_to_forms/3).
+
+	 	 
+
+:- export(input_to_forms/3).
+
+%% input_to_forms( ?In, ?FormsOut, ?Vars) is det.
+%
+% Get Input Converted To Forms.
+%
+input_to_forms(Codes,FormsOut,Vars):- 
+  b_setval('$variable_names',[])-> 
+  input_to_forms0(Codes,FormsOut,Vars) ->
+  nop(set_variable_names_safe(Vars)).
   
+is_variable_names_safe(Vars):- var(Vars),!.
+is_variable_names_safe([N=V|Vars]):- !,
+   is_name_variable_safe(N,V) -> 
+   is_variable_names_safe(Vars).
+is_variable_names_safe([]).
 
-w_l_t(I,O):- parse_sexpr(I,M),to_untyped(M,O),!.
+is_name_variable_safe(N,V):- 
+  ok_var_name(N)-> var(V).
+   
 
-:- meta_predicate(with_lisp_translation_cached(+,2,1)).
-:- meta_predicate(maybe_cache_lisp_translation(+,+,2)).
+set_variable_names_safe(Vars):-
+  is_variable_names_safe(Vars)->
+  b_setval('$variable_names',Vars); true.
 
-with_lisp_translation_cached(LFile,WithPart2,WithPart1):- 
-   absolute_file_name(LFile,File),
-   temp_file_for(LFile,Temp),
-   maybe_cache_lisp_translation(File,Temp,WithPart2),
-   finish_lisp_translation_cached(File,Temp,WithPart1).
-
-finish_lisp_translation_cached(File,Temp,WithPart1):-
-   load_files([Temp],[qcompile(auto)]),
-   forall(lisp_trans(Part2,File:Line),
-   once((b_setval('$lisp_translation_line',Line),
-         call(WithPart1,Part2)))).
-  
-maybe_cache_lisp_translation(File,Temp,_):- \+ file_needs_rebuilt(Temp,File),!.
-maybe_cache_lisp_translation(File,Temp,WithPart2):- 
- setup_call_cleanup(open(Temp,write,Outs),
-  must_det((format(Outs,'~N~q.~n',[:- multifile(lisp_trans/2)]),
-            format(Outs,'~N~q.~n',[:- dynamic(lisp_trans/2)]),
-            format(Outs,'~N~q.~n',[:- style_check(-singleton)]),
-            with_lisp_translation(File,write_trans(Outs,File,WithPart2)))),
-  ignore(catch(close(Outs),_,true))),!.
-  
-
-write_trans(Outs,File,WithPart2,Lisp):-
-   must_det((call(WithPart2,Lisp,Part),
-   b_getval('$lisp_translation_line',Line),
-   format(Outs,'~N~q.~n',[lisp_trans(Part,File:Line)]))),!.
+input_to_forms0(Codes,FormsOut,Vars):- 
+    % is_openable(Codes),!,
+    !, parse_sexpr(Codes, Forms0),
+    once((to_untyped(Forms0, Forms1),extract_lvars(Forms1,FormsOut,Vars))).
+input_to_forms0(Forms,FormsOut,Vars):-
+    (to_untyped(Forms, Forms1) ->
+    extract_lvars(Forms1,FormsOut,Vars)-> true),!.
 
 
-with_lisp_translation(In,With):- 
-   is_stream(In),!,
-   b_setval('$lisp_translation_stream',In),
-   set_stream(In,encoding(octet)),!,
-   repeat,
-     ignore(catch(line_count(In,Line),_,(Line = -1))),
-     b_setval('$lisp_translation_line',Line),
-     maybe_notrace(w_l_t(In,O)),
-      (O== end_of_file -> ! ; (must_det(once(maybe_notrace(call(With,O)))),fail)).
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    Lisprolog -- Interpreter for a simple Lisp. Written in Prolog.
+    Written Nov. 26th, 2006 by Markus Triska (triska@gmx.at).
+    Public domain code.
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-with_lisp_translation(Other,With):- 
-   setup_call_cleanup(l_open_input(Other,In),
-     with_lisp_translation(In,With),
-     ignore(catch(close(In),_,true))),!.
+:- style_check(-singleton).
+:- style_check(-discontiguous).
+% :- style_check(-atom).
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+   Parsing
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+tstl:- tstl('./games/ontologyportal_sumo/Merge.kif'),
+         tstl('./games/ontologyportal_sumo/Translations/relations-en.txt'),
+         tstl('./games/ontologyportal_sumo/english_format.kif'),
+         tstl('./games/ontologyportal_sumo/domainEnglishFormat.kif'),
+         tstl('./games/ontologyportal_sumo/Mid-level-ontology.kif'),
+         !.
+
+writeqnl(O):-writeq(O),nl.
+
 
 
 :- fixup_exports.
