@@ -275,7 +275,7 @@ sexpr('$OBJ'(brack_vector,V))                 --> `[`, sexpr_vector(V,`]`),!, sw
 sexpr('?'(E))              --> `?`, sexpr_dcgPeek(([C],{sym_char(C)})),!, rsymbol('?',E), swhite.
 sexpr('#'(t))                 --> `#t`, !, swhite.
 sexpr('#'(f))                 --> `#f`, !, swhite.
-sexpr('#'(A))              --> `|`, !, read_string_until(S,`|`), swhite,{atom_string(A,S)}.
+sexpr('#'(A))              --> `|`, !, read_string_until(S,`|`), swhite,{maybe_notrace(atom_string(A,S))}.
 sexpr('#'(E))              --> `#$`, !, rsymbol('#$',E), swhite.
 sexpr('#'(E))              --> `&%`, !, rsymbol('#$',E), swhite.
 sexpr('#\\'(C))                 --> `#\\`,rsymbol('',C), swhite.
@@ -680,7 +680,7 @@ ok_var_name(Name):-
 %
 % Atom Upper.
 %
-atom_upper(A,U):-string_upper(A,S),atom_string(U,S).
+atom_upper(A,U):-string_upper(A,S),maybe_notrace(atom_string(U,S)).
 
 
 %= 	 	 
@@ -1070,7 +1070,8 @@ process_rff(CU,OnFirst,OnRetry,OnSuccess,OnFailure):-
 %
 fixvars(P,_,[],P):-!.
 fixvars(P,N,[V|VARS],PO):-  
-     atom_string(Name,V),svar_fixvarname(Name,NB),Var = '$VAR'(NB),
+     maybe_notrace(atom_string(Name,V)),
+     svar_fixvarname(Name,NB),Var = '$VAR'(NB),
      subst(P,'$VAR'(N),Var,PM0),
      subst(PM0,'$VAR'(Name),Var,PM),
    %  (get_varname_list(Vs)->true;Vs=[]),
