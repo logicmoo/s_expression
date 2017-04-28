@@ -193,7 +193,7 @@ txt_to_codes(AttVar,AttVarO):-attvar(AttVar),!,AttVarO=AttVar.
 txt_to_codes(S,Codes):- is_stream(S),!,stream_to_lazy_list(S,Codes),!.
 txt_to_codes([C|Text],[C|Text]):- integer(C),is_list(Text),!.
 % txt_to_codes([C|Text],_):- atom(C),atom_length(C,1),!,throw(txt_to_codes([C|Text])).
-txt_to_codes(Text,Codes):- catch((text_to_string(Text,String),!,string_codes(String,Codes)),_,fail).
+txt_to_codes(Text,Codes):- catch((text_to_string_safe(Text,String),!,string_codes(String,Codes)),_,fail).
 
 %% parse_sexpr_ascii( +Codes, -Expr) is det.
 %
@@ -233,7 +233,7 @@ file_sexpr(end_of_file) --> [X],{ var(X), X = -1},!.
 file_sexpr(end_of_file) --> [X],{ attvar(X), X = -1},!.
 file_sexpr(end_of_file) --> [X],{ attvar(X), X = end_of_file},!.
 file_sexpr('$COMMENT'(Expr)) --> line_comment(Expr),!.
-file_sexpr('$COMMENT'(Txt)) --> `#|`, !, read_string_until(S,`|#`), swhite,{text_to_string(S,Txt)}.
+file_sexpr('$COMMENT'(Txt)) --> `#|`, !, read_string_until(S,`|#`), swhite,{text_to_string_safe(S,Txt)}.
 file_sexpr('$COMMENT'([])) --> sblank_lines,!.
 
 %   0.0003:   (PICK-UP ANDY IBM-R30 CS-LOUNGE) [0.1000]
@@ -281,8 +281,8 @@ sexpr('#'(E))              --> `&%`, !, rsymbol('#$',E), swhite.
 sexpr('#\\'(C))                 --> `#\\`,rsymbol('',C), swhite.
 sexpr('$CHAR'(C))                 --> `#\\`,!,sym_or_num(C), swhite.
 sexpr((""))             --> `""`,!, swhite.
-sexpr((Txt))                 --> `#|`, !, read_string_until(S,`|#`), swhite,{text_to_string(S,Txt)}.
-sexpr((Txt))                 --> `"`, !, sexpr_string(S), swhite,{text_to_string(S,Txt)}.
+sexpr((Txt))                 --> `#|`, !, read_string_until(S,`|#`), swhite,{text_to_string_safe(S,Txt)}.
+sexpr((Txt))                 --> `"`, !, sexpr_string(S), swhite,{text_to_string_safe(S,Txt)}.
 sexpr(['#'(quote),E])              --> `'`, !, swhite, sexpr(E).
 sexpr(['#'(backquote),E])         --> [96] , !, swhite, sexpr(E).
 sexpr(['#'(function),E])                 --> `#\'`, sexpr(E), !. %, swhite.
@@ -341,7 +341,7 @@ eoln(10).
 eoln(13).
 
 
-line_comment([T])--> `;`,!,l_line_comment(S),{text_to_string(S,T)},!.
+line_comment([T])--> `;`,!,l_line_comment(S),{text_to_string_safe(S,T)},!.
 
 l_line_comment([]) --> eoln, !.
 l_line_comment([C|L]) --> [C], l_line_comment(L).
@@ -386,7 +386,7 @@ rsymbol(Prepend,E) --> [C], {sym_char(C)}, sym_string(S), {string_to_atom([C|S],
 
 rsymbol_maybe(Prepend,ES) --> rsymbol(Prepend,E),{maybe_string(E,ES)}.
 
-maybe_string(E,ES):- nb_current('$maybe_string',t),!,text_to_string(E,ES).
+maybe_string(E,ES):- nb_current('$maybe_string',t),!,text_to_string_safe(E,ES).
 maybe_string(E,E).
 
 sym_string([H|T]) --> [H], {sym_char(H)}, sym_string(T).
@@ -489,14 +489,14 @@ to_untyped(ExprI,ExprO):- must(ExprI=..Expr),
 % to_untyped(Expr,Forms):-compile_all(Expr,Forms),!.
 
 to_number(S,S):-number(S),!.
-to_number(S,N):- catch(text_to_string(S,Str),_,fail),number_string(N,Str),!.
+to_number(S,N):- text_to_string_safe(S,Str),number_string(N,Str),!.
 
 to_char(S,'$CHAR'(S)):- var(S),!.
 to_char(S,C):- atom(S),name(S,[N]),!,to_char(N,C).
 to_char(N,'$CHAR'(S)):- integer(N),(char_type(N,alnum)->name(S,[N]);S=N),!.
 to_char('#'(S),C):- !, to_char(S,C).
 to_char('$CHAR'(S),C):- !, to_char(S,C).
-to_char(N,C):- text_to_string(N,Str),char_code_from_name(Str,Code),to_char(Code,C),!.
+to_char(N,C):- text_to_string_safe(N,Str),char_code_from_name(Str,Code),to_char(Code,C),!.
 to_char(C,'$CHAR'(C)).
 
 char_code_from_name(Str,Code):-find_from_name(Str,Code),!.
@@ -515,7 +515,7 @@ find_from_name2(Str,Code):-find_from_name(Str,Code).
 find_from_name2(Str,Code):-lisp_code_name(Code,Chars),text_upper(Chars,Str).
 find_from_name2(Str,Code):-lisp_code_name_extra(Code,Chars),text_upper(Chars,Str).
 
-text_upper(T,U):-text_to_string(T,S),string_upper(S,U).
+text_upper(T,U):-text_to_string_safe(T,S),string_upper(S,U).
 
 lisp_code_name_extra(0,`Null`).
 lisp_code_name_extra(7,`Bell`).
