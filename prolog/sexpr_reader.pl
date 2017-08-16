@@ -435,6 +435,7 @@ sym_char(C) :- bx(C >  32), \+ (member(C,[34,59,40,41,35,39,44,96])).
 :- nb_setval('$maybe_string',[]).
 
 :- thread_local(t_l:s2p/1).
+:- thread_local(t_l:each_file_term/1).
 
 
 
