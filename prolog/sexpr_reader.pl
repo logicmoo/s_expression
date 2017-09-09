@@ -112,7 +112,7 @@ lazy_forgotten(In,UnUsed,UnUsed):-
 tstl(I):- with_lisp_translation(I,writeqnl).
 
 supports_seek(In):- catch(stream_property(In,reposition(true)),_,fail).
-% supports_seek(In):- notrace(( catch((catch((seek(In, 1, current, _),seek(In, -1, current, _)),error(permission_error(reposition, stream, _), _Ctx),fail)),error(_,_),true))).
+% supports_seek(In):- quietly(( catch((catch((seek(In, 1, current, _),seek(In, -1, current, _)),error(permission_error(reposition, stream, _), _Ctx),fail)),error(_,_),true))).
 
 phrase_from_stream_eof(Grammar, _):- Grammar=end_of_file,!.
 phrase_from_stream_eof(Grammar, _):- term_variables(Grammar,[end_of_file]),!.
@@ -663,7 +663,7 @@ ok_varname_or_int(Name):- number(Name).
 % Ok Varname.
 %
 ok_var_name(Name):- 
-  notrace(( atom(Name),atom_codes(Name,[C|_List]),char_type(C,prolog_var_start),
+  quietly(( atom(Name),atom_codes(Name,[C|_List]),char_type(C,prolog_var_start),
       read_term_from_atom(Name,Term,[syntax_errors(fail),variable_names(Vs)]),!,var(Term),Vs=[RName=RVAR],!,RVAR==Term,RName==Name)).
 
 %:- export(ok_codes_in_varname/1).
