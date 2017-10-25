@@ -5,7 +5,7 @@
   input_to_forms/3,
   input_to_forms_debug/1,
   input_to_forms_debug/2,
-  sexpr_sterm_to_pterm_list/2,
+  sexpr_sterm_to_pterm_list/3,
   sexpr//1,
   fixvars/4,
   txt_to_codes/2,
@@ -20,6 +20,8 @@
   parse_sexpr/2]).
 
 :- set_module(class(library)).
+:- use_module(library(filestreams)).
+:- use_module(library(bugger)).
 
 
 :- meta_predicate((with_lisp_translation(+,1),input_to_forms_debug(+,2))).
@@ -30,6 +32,7 @@
 :- dynamic user:file_search_path/2.
 :- multifile user:file_search_path/2.
 
+:- thread_local(t_l:s_reader_info/1).
 
 %% with_lisp_translation( +FileOrStream, :Pred1) is det.
 %
@@ -43,13 +46,16 @@ with_lisp_translation(In,Pred1):-
      ignore(catch(line_count(In,Line),_,(Line = -1))),
      b_setval('$lisp_translation_line',Line),
      maybe_notrace(parse_sexpr_untyped(In,O)),
-      (O== end_of_file -> ! ; 
-  (must_det(once(maybe_notrace(call(Pred1,O)))),fail)).
-
+      (O== end_of_file -> (with_rest_info(Pred1),!) ; 
+      (must_det(once(maybe_notrace(call_proc(Pred1,O)))),fail)),!.
 with_lisp_translation(Other,Pred1):- 
    setup_call_cleanup(l_open_input(Other,In),
      with_lisp_translation(In,Pred1),
      ignore(catch(close(In),_,true))),!.
+
+call_proc(Pred1,O):- call(Pred1,O),with_rest_info(Pred1).
+
+with_rest_info(Pred1):- forall(retract(t_l:s_reader_info(O2)),must_det(call(Pred1,O2))).
 
 parse_sexpr_untyped(I,O):- parse_sexpr(I,M),to_untyped(M,O),!.
 
@@ -66,29 +72,35 @@ make_tmpfile_name(Name,Temp):-
 
 
 
-:- meta_predicate(with_lisp_translation_cached(+,2,1)).
+:- meta_predicate(with_lisp_translation_cached(:,2,1)).
 :- meta_predicate(maybe_cache_lisp_translation(+,+,2)).
 
-with_lisp_translation_cached(LFile,WithPart2,WithPart1):- 
+with_lisp_translation_cached(M:LFile,WithPart2,WithPart1):- 
    absolute_file_name(LFile,File),
    make_tmpfile_name(LFile,Temp),
    maybe_cache_lisp_translation(File,Temp,WithPart2),
-   finish_lisp_translation_cached(File,Temp,WithPart1).
+   finish_lisp_translation_cached(M,File,Temp,WithPart1).
 
-finish_lisp_translation_cached(File,Temp,WithPart1):-
-   load_files([Temp],[qcompile(auto)]),
-   forall(lisp_trans(Part2,File:Line),
+finish_lisp_translation_cached(M,File,Temp,WithPart1):-
+   multifile(M:lisp_trans/2),
+   dynamic(M:lisp_trans/2),
+   file_base_name(File,BaseName),
+   M:load_files([Temp],[qcompile(auto)]),
+   forall(M:lisp_trans(Part2,BaseName:Line),
    once((b_setval('$lisp_translation_line',Line),
-         call(WithPart1,Part2)))).
+         M:call(WithPart1,Part2)))).
   
 maybe_cache_lisp_translation(File,Temp,_):- \+ file_needs_rebuilt(Temp,File),!.
 maybe_cache_lisp_translation(File,Temp,WithPart2):- 
+ file_base_name(File,BaseName),
  setup_call_cleanup(open(Temp,write,Outs),
   must_det((format(Outs,'~N~q.~n',[:- multifile(lisp_trans/2)]),
             format(Outs,'~N~q.~n',[:- dynamic(lisp_trans/2)]),
             format(Outs,'~N~q.~n',[:- style_check(-singleton)]),
-            with_lisp_translation(File,write_trans(Outs,File,WithPart2)))),
-  ignore(catch(close(Outs),_,true))),!.
+            format(Outs,'~N~q.~n',[lisp_trans(translated(File,Temp,BaseName),BaseName:( -1))]),            
+            with_lisp_translation(File,write_trans(Outs,BaseName,WithPart2)),
+            format(Outs,'~N~q.~n',[end_of_file]))),
+  ((ignore(catch(flush_output(Outs),_,true)),ignore(catch(close(Outs),_,true))))),!.
   
 
 write_trans(Outs,File,WithPart2,Lisp):-
@@ -120,15 +132,20 @@ phrase_from_stream_eof(_, In):- throw(at_end_of_stream(In)).
 
 phrase_from_stream_part(Grammar, In) :- \+ supports_seek(In),!,phrase_from_pending_stream(Grammar, In).
 phrase_from_stream_part(Grammar, In) :- at_end_of_stream(In),!,phrase_from_stream_eof(Grammar, In).
-phrase_from_stream_part(Grammar, In) :- must(sanity(stream_property(In,reposition(true)))),!,
+
+phrase_from_stream_part(Grammar, In) :- phrase_from_stream_part_seekable(Grammar, In).
+
+phrase_from_stream_part_seekable(Grammar, In) :- 
+    must(sanity(stream_property(In,reposition(true)))),!,
     % set_stream(In,buffer_size(16384)),!, % set_stream(In,buffer(full)),
     character_count(In, FailToPosition),!,
     (phrase_from_stream_lazy_part(Grammar, In) -> true ; 
-      (seek(In,FailToPosition,bof,_),!,fail)).
+      (seek(In,FailToPosition,bof,_),!,fail)),!.
 
 phrase_from_stream_lazy_part(Grammar, In):- 
     seek(In, 0, current, Prev),!,
     stream_to_lazy_list(In, List),!,
+    nb_setval('$lisp_translation_line',Prev),
     phrase(Grammar, List, More),!,
     must_det_l((
        length(List,Used),!,
@@ -139,7 +156,7 @@ phrase_from_stream_lazy_part(Grammar, In):-
 
 phrase_from_pending_stream(Grammar, In):-
    un_fake_buffer_codes(In,CodesPrev),
-   phrase_from_pending_stream(CodesPrev, Grammar, In).
+   phrase_from_pending_stream(CodesPrev, Grammar, In),!.
 
 phrase_from_pending_stream(CodesPrev,Grammar,In):- 
   read_codes_from_pending_input(In,Codes),!,
@@ -232,14 +249,12 @@ file_sexpr(end_of_file,I,O):- I==end_of_file,!,O=[].
 file_sexpr(end_of_file) --> [X],{ var(X), X = -1},!.
 file_sexpr(end_of_file) --> [X],{ attvar(X), X = -1},!.
 file_sexpr(end_of_file) --> [X],{ attvar(X), X = end_of_file},!.
-file_sexpr('$COMMENT'(Expr)) --> line_comment(Expr),!.
-file_sexpr('$COMMENT'(Txt)) --> `#|`, !, read_string_until(S,`|#`), swhite,{text_to_string_safe(S,Txt)}.
-file_sexpr('$COMMENT'([])) --> sblank_lines,!.
+file_sexpr('$COMMENT'(Expr,I,CP)) --> line_comment(Expr,I,CP),!.
+file_sexpr('$COMMENT1'(Txt)) --> `#|`, !, read_string_until(S,`|#`), swhite,{text_to_string_safe(S,Txt)}.
+file_sexpr('$COMMENT0'([])) --> sblank_lines,!.
 
 %   0.0003:   (PICK-UP ANDY IBM-R30 CS-LOUNGE) [0.1000]
 % file_sexpr(planStepLPG(Name,Expr,Value)) --> swhite,sym_or_num(Name),`:`,swhite, sexpr(Expr),swhite, `[`,sym_or_num(Value),`]`,swhite.
-
-file_sexpr('#+'(C,O)) --> `#+`,!,sexpr(C),swhite,!,file_sexpr(O).
 
 % file_sexpr(Term,Left,Right):- eoln(EOL),append(LLeft,[46,EOL|Right],Left),read_term_from_codes(LLeft,Term,[double_quotes(string),syntax_errors(fail)]),!.
 % file_sexpr(Term,Left,Right):- append(LLeft,[46|Right],Left), ( \+ member(46,Right)),read_term_from_codes(LLeft,Term,[double_quotes(string),syntax_errors(fail)]),!.
@@ -255,8 +270,11 @@ file_sexpr(Expr) --> {fail}, sexpr_lazy_list_character_count(Location,Stream),
 % WANT? 
 file_sexpr(O) --> one_blank,!,file_sexpr(O).
 file_sexpr(Expr) --> sexpr(Expr),!.
-
 file_sexpr(end_of_file) --> [].
+
+% file_sexpr('$ERROR'(S_EOF)) --> read_until_eof_e(Unitl_EOF),!,{sformat(S_EOF,'~s',[Unitl_EOF])}.
+% read_until_eof_e(Unitl_EOF,S,E):- append(S,E,Unitl_EOF),break,is_list(Unitl_EOF),!.
+
 
 implode_threse_vars([N='$VAR'(N)|Vars]):-!, implode_threse_vars(Vars).
 implode_threse_vars([]).
@@ -268,10 +286,19 @@ sexpr(L)                      --> `(`, !, swhite, sexpr_list(L),!, swhite.
 sexpr((Expr))                 --> `{`, !, read_string_until(S,`}.`),!, swhite,
   {read_term_from_codes(S,Expr,[cycles(true),module(baseKB),double_quotes(string),variable_names(Vars)]),implode_threse_vars(Vars)}.
 
+/*
+sexpr((Txt))                 --> sblank,sexpr((Txt)).
+sexpr((Txt))                 --> `#|`, lazy_list_location(file(_,_,I,CP)), 
+   read_string_until(S,`|#`), swhite,{text_to_string_safe(S,Txt)},line_comment(S,I,CP),
+  {assert(t_l:s_reader_info('$COMMENT'(Txt,I,CP)))},
+  sexpr((Txt)).
+*/
 sexpr('$OBJ'(vector,V))                 --> `#(`, !, sexpr_vector(V,`)`),!, swhite,!.
 sexpr('$OBJ'(vugly,V))                 --> `#<`, sexpr_vector(V,`>`),!, swhite.
 sexpr('$OBJ'(ugly,V))                 --> `#<`, read_string_until(V,`>`),!, swhite.
 sexpr('$OBJ'(brack_vector,V))                 --> `[`, sexpr_vector(V,`]`),!, swhite.
+sexpr('#-'(C,O)) --> `#-`,!,sexpr(C),swhite,!,file_sexpr(O).
+sexpr('#+'(C,O)) --> `#+`,!,sexpr(C),swhite,!,file_sexpr(O).
 sexpr('?'(E))              --> `?`, sexpr_dcgPeek(([C],{sym_char(C)})),!, rsymbol('?',E), swhite.
 sexpr('#'(t))                 --> `#t`, !, swhite.
 sexpr('#'(f))                 --> `#f`, !, swhite.
@@ -280,9 +307,8 @@ sexpr('#'(E))              --> `#$`, !, rsymbol('#$',E), swhite.
 sexpr('#'(E))              --> `&%`, !, rsymbol('#$',E), swhite.
 sexpr('#\\'(C))                 --> `#\\`,rsymbol('',C), swhite.
 sexpr('$CHAR'(C))                 --> `#\\`,!,sym_or_num(C), swhite.
-sexpr((""))             --> `""`,!, swhite.
-sexpr((Txt))                 --> `#|`, !, read_string_until(S,`|#`), swhite,{text_to_string_safe(S,Txt)}.
-sexpr((Txt))                 --> `"`, !, sexpr_string(S), swhite,{text_to_string_safe(S,Txt)}.
+sexpr('$STRING'(""))             --> `""`,!, swhite.
+sexpr('$STRING'(Txt))                 --> `"`, !, sexpr_string(S), swhite,{text_to_string_safe(S,Txt)}.
 sexpr(['#'(quote),E])              --> `'`, !, swhite, sexpr(E).
 sexpr(['#'(backquote),E])         --> [96] , !, swhite, sexpr(E).
 sexpr(['#'(function),E])                 --> `#\'`, sexpr(E), !. %, swhite.
@@ -296,20 +322,12 @@ sym_or_num((E)) --> rsymbol_maybe('',E),!.
 sym_or_num('#'(E)) --> [C],{name(E,[C])}.
 
 sblank --> [C], {var(C)},!.
+sblank --> line_comment(S,I,CP),{assert(t_l:s_reader_info('$COMMENT'(S,I,CP)))},!, swhite.
 sblank --> [C], {nonvar(C),charvar(C),!,bx(C =< 32)},!, swhite.
-sblank --> line_comment(S),{nop(dmsg(line_comment(S)))},!,swhite.
 
 sblank_lines --> {eoln(C)},[C],!.
 sblank_lines --> [C], {charvar(C),!,bx(C =< 32)}, sblank_lines.
-/*
-sblank --> one_blank,!, swhite.
-% sblank --> line_comment(S),{(dmsg(line_comment(S)))},!,swhite.
-sblank --> line_comment(_),!.
 
-sblank_lines --> eoln, !.
-sblank_lines --> one_blank, !, sblank_lines.
-
-*/
 
 swhite --> sblank,!.
 swhite --> [].
@@ -341,7 +359,10 @@ eoln(10).
 eoln(13).
 
 
-line_comment([T])--> `;`,!,l_line_comment(S),{text_to_string_safe(S,T)},!.
+
+line_comment(Txt,N,CharPOS) --> `#|`, !,lazy_list_location(file(_,_,N,CharPOS)), read_string_until(S,`|#`), swhite,{text_to_string_safe(S,Txt)}.
+line_comment(T,N,CharPOS) --> `;`,lazy_list_location(file(_,_,N,CharPOS)),l_line_comment(S),{text_to_string_safe(S,T)},!.
+line_comment(T,(-1),(-1)) --> `;`,!,l_line_comment(S),{text_to_string_safe(S,T)},!.
 
 l_line_comment([]) --> eoln, !.
 l_line_comment([C|L]) --> [C], l_line_comment(L).
@@ -472,6 +493,7 @@ to_untyped('#'(S),O):- !, (nonvar(S)->to_untyped(S,O) ; O='#'(S)).
 to_untyped('#\\'(S),C):-!,to_untyped('$CHAR'(S),C),!.
 to_untyped('$CHAR'(S),C):-to_char(S,C),!.
 to_untyped('$CHAR'(S),'$CHAR'(S)):-!.
+to_untyped('$STRING'(S),(S)):-!.
 to_untyped('$COMMA'(S),'$COMMA'(O)):-to_untyped(S,O),!.
 to_untyped('$OBJ'(S),'$OBJ'(O)):-to_untyped(S,O),!.
 to_untyped('$OBJ'(Ungly,S),O):-to_untyped(S,SO),!,O=..[Ungly,SO].
@@ -1085,8 +1107,8 @@ fixvars(P,N,[V|VARS],PO):-
 
 non_empty_atom(A1):- atom(A1),atom_length(A1,AL),!,AL>0.
 
-:- meta_predicate(sexpr_sterm_to_pterm(?,?)).
-:- meta_predicate(sexpr_sterm_to_pterm_list(?,?)).
+:- meta_predicate(sexpr_sterm_to_pterm(+,?,?)).
+:- meta_predicate(sexpr_sterm_to_pterm_list(+,?,?)).
 
 is_relation_sexpr('=>').
 is_relation_sexpr('<=>').
@@ -1110,42 +1132,66 @@ is_exact_symbol('??',_).
 
 maybe_var(S,Name,'$VAR'(Name)):- S=='?',atom(Name),!.
 
-%% sexpr_sterm_to_pterm( ?VAR, ?V) is det.
+%% sexpr_sterm_to_pterm(?VAR, ?V) is det.
 %
 % S-expression Sterm Converted To Pterm.
 %
-sexpr_sterm_to_pterm(VAR,VAR):-is_ftVar(VAR),!.
-sexpr_sterm_to_pterm(S,P):- is_exact_symbol(S,P),!.
-sexpr_sterm_to_pterm('#'(S),P):- is_exact_symbol(S,P),!.
-sexpr_sterm_to_pterm(VAR,'$VAR'(Name)):- atom(VAR),svar(VAR,Name),!.
-% sexpr_sterm_to_pterm(List,PTERM):- append(Left,[S,Name|TERM],List),maybe_var(S,Name,Var),!,append(Left,[Var|TERM],NewList), sexpr_sterm_to_pterm(NewList,PTERM).
-% sexpr_sterm_to_pterm([S|TERM],dot_holds(PTERM)):- \+ (is_list(TERM)),sexpr_sterm_to_pterm_list([S|TERM],PTERM),!.
-%sexpr_sterm_to_pterm([S|TERM],PTERM):- \+ atom(S),sexpr_sterm_to_pterm_list([S|TERM],PTERM),!.
+sexpr_sterm_to_pterm(S,P):- sexpr_sterm_to_pterm(0,S,P).
+
+sexpr_sterm_to_pterm(_TD,VAR,VAR):-is_ftVar(VAR),!.
+sexpr_sterm_to_pterm(_TD,S,P):- is_exact_symbol(S,P),!.
+sexpr_sterm_to_pterm(_TD,'#'(S),P):- is_exact_symbol(S,P),!.
+sexpr_sterm_to_pterm(_TD,VAR,'$VAR'(Name)):- atom(VAR),svar(VAR,Name),!.
+
+% sexpr_sterm_to_pterm(TD,List,PTERM):- append(Left,[S,Name|TERM],List),maybe_var(S,Name,Var),!,append(Left,[Var|TERM],NewList), sexpr_sterm_to_pterm(TD,NewList,PTERM).
+% sexpr_sterm_to_pterm(TD,[S|TERM],dot_holds(PTERM)):- \+ (is_list(TERM)),sexpr_sterm_to_pterm_list(TD,[S|TERM],PTERM),!.
+%sexpr_sterm_to_pterm(TD,[S|TERM],PTERM):- \+ atom(S),sexpr_sterm_to_pterm_list(TD,[S|TERM],PTERM),!.
 /*
-sexpr_sterm_to_pterm([S,Vars|TERM],PTERM):- nonvar(S),
+sexpr_sterm_to_pterm(TD,[S,Vars|TERM],PTERM):- nonvar(S),
    call_if_defined(common_logic_snark:is_quantifier(S)),
-   must_det_l((sexpr_sterm_to_pterm_list(TERM,PLIST),
+   must_det_l((sexpr_sterm_to_pterm_list(TD,TERM,PLIST),
    PTERM=..[S,Vars|PLIST])),!.
 */
-sexpr_sterm_to_pterm([S|TERM],PTERM):- !, sexpr_sterm_to_pterm_list([S|TERM],PLIST),s_univ(PTERM,PLIST),!.
-sexpr_sterm_to_pterm(VAR,VAR).
+
+sexpr_sterm_to_pterm(_,[S|STERM],PTERM):- var(S),  TD1 is TD+1, sexpr_sterm_to_pterm_list(TD1,STERM,PLIST),s_univ(TD,PTERM,[S|PLIST]),!.
+sexpr_sterm_to_pterm(_,[S,STERM],PTERM):- is_quoter(S), !,PTERM=..[S,STERM],!.
+sexpr_sterm_to_pterm(_,[S|STERM],PTERM):- is_quoter(S), !,PTERM=..[S,STERM],!.
+sexpr_sterm_to_pterm(TD,[S|STERM],PTERM):- is_list(STERM),next_args_are_lists_unless_string(S,NonList),
+  length(LEFT,NonList),append(LEFT,[List|RIGHT],STERM),is_list(List),
+  TD1 is TD+1,
+  sexpr_sterm_to_pterm_list(TD1,LEFT,PLEFTLIST),  
+  sexpr_sterm_to_pterm_list(0,RIGHT,PRIGHTLIST),
+  append(PLEFTLIST,[List|PRIGHTLIST],PLIST),
+  s_univ(TD,PTERM,[S|PLIST]),!.
+
+sexpr_sterm_to_pterm(TD,STERM,PTERM):- TD1 is TD+1, is_list(STERM),!, sexpr_sterm_to_pterm_list(TD1,STERM,PLIST),s_univ(TD,PTERM,PLIST),!.
+sexpr_sterm_to_pterm(_TD,VAR,VAR).
+
+is_quoter('$BQ').
+is_quoter('$COMMA').
+is_quoter('quote').
+
+next_args_are_lists_unless_string(defmacro,1).
+next_args_are_lists_unless_string(defun,1).
+next_args_are_lists_unless_string(let,0).
+next_args_are_lists_unless_string('let*',0).
+
+%sexpr_sterm_to_pterm(TD,[S|TERM],PTERM):- (number(S);  (atom(S),fail,atom_concat(_,'Fn',S))),sexpr_sterm_to_pterm_list(TD,[S|TERM],PTERM),!.            
+%sexpr_sterm_to_pterm(TD,[S],O):- is_ftVar(S),sexpr_sterm_to_pterm(TD,S,Y),!,s_univ(TD,O,[Y]),!.
+%sexpr_sterm_to_pterm(TD,[S],O):- nonvar(S),sexpr_sterm_to_pterm(TD,S,Y),!,s_univ(TD,O,[Y]),!.
+%sexpr_sterm_to_pterm(TD,[S|TERM],PTERM):- is_ftVar(S), sexpr_sterm_to_pterm_list(TD,TERM,PLIST),s_univ(TD,PTERM,[t,S|PLIST]),!.
+%sexpr_sterm_to_pterm(TD,[S|TERM],PTERM):- \+ atom(S), sexpr_sterm_to_pterm_list(TD,TERM,PLIST),s_univ(TD,PTERM,[t,S|PLIST]),!.
+%sexpr_sterm_to_pterm(TD,[S|TERM],PTERM):- S==and,!,must_det_l((maplist(sexpr_sterm_to_pterm,TERM,PLIST),list_to_conjuncts(',',PLIST,PTERM))).
+% sexpr_sterm_to_pterm(TD,[S|TERM],PTERM):- is_va_relation(S),!,must_det_l((maplist(sexpr_sterm_to_pterm,TERM,PLIST),list_to_conjuncts(S,PLIST,PTERM))).
+%sexpr_sterm_to_pterm(TD,[S|TERM],PTERM):- is_relation_sexpr(S),must_det_l((sexpr_sterm_to_pterm_list(TD,TERM,PLIST),PTERM=..[S|PLIST])),!.
+%sexpr_sterm_to_pterm(TD,STERM,PTERM):- STERM=..[S|TERM],sexpr_sterm_to_pterm_list(TD,TERM,PLIST),s_univ(TD,PTERM,[S|PLIST]),!.
 
 
-
-%sexpr_sterm_to_pterm([S|TERM],PTERM):- (number(S);  (atom(S),fail,atom_concat(_,'Fn',S))),sexpr_sterm_to_pterm_list([S|TERM],PTERM),!.            
-%sexpr_sterm_to_pterm([S],O):- is_ftVar(S),sexpr_sterm_to_pterm(S,Y),!,s_univ(O,[Y]),!.
-%sexpr_sterm_to_pterm([S],O):- nonvar(S),sexpr_sterm_to_pterm(S,Y),!,s_univ(O,[Y]),!.
-%sexpr_sterm_to_pterm([S|TERM],PTERM):- is_ftVar(S), sexpr_sterm_to_pterm_list(TERM,PLIST),s_univ(PTERM,[t,S|PLIST]),!.
-%sexpr_sterm_to_pterm([S|TERM],PTERM):- \+ atom(S), sexpr_sterm_to_pterm_list(TERM,PLIST),s_univ(PTERM,[t,S|PLIST]),!.
-%sexpr_sterm_to_pterm([S|TERM],PTERM):- S==and,!,must_det_l((maplist(sexpr_sterm_to_pterm,TERM,PLIST),list_to_conjuncts(',',PLIST,PTERM))).
-% sexpr_sterm_to_pterm([S|TERM],PTERM):- is_va_relation(S),!,must_det_l((maplist(sexpr_sterm_to_pterm,TERM,PLIST),list_to_conjuncts(S,PLIST,PTERM))).
-%sexpr_sterm_to_pterm([S|TERM],PTERM):- is_relation_sexpr(S),must_det_l((sexpr_sterm_to_pterm_list(TERM,PLIST),PTERM=..[S|PLIST])),!.
-%sexpr_sterm_to_pterm(STERM,PTERM):- STERM=..[S|TERM],sexpr_sterm_to_pterm_list(TERM,PLIST),s_univ(PTERM,[S|PLIST]),!.
-
-
-s_univ(P,[F|ARGS]):- atom(F),is_list(ARGS),length(ARGS,A),l_arity(F,A),P=..[F|ARGS].
-s_univ(P,[F|ARGS]):- atom(F),is_list(ARGS),P=..[F|ARGS].
-s_univ(P,S):-P=S.
+s_univ(1,S,S):-!.
+s_univ(_TD,P,[F|ARGS]):- atom(F),is_list(ARGS),length(ARGS,A),l_arity(F,A),P=..[F|ARGS].
+s_univ(0,P,[F|ARGS]):- atom(F),is_list(ARGS),P=..[F|ARGS].
+s_univ(_TD,P,[F|ARGS]):- atom(F),is_list(ARGS),P=..[F|ARGS].
+s_univ(_TD,P,S):-P=S.
 
 l_arity(F,A):- clause_b(arity(F,A)).
 l_arity(function,1).
@@ -1154,20 +1200,20 @@ l_arity('$BQ',1).
 l_arity(F,A):-current_predicate(F/A).
 l_arity(_,1).
 
-%% sexpr_sterm_to_pterm_list( ?VAR, ?VAR) is det.
+%% sexpr_sterm_to_pterm_list(TD, ?VAR, ?VAR) is det.
 %
 % S-expression Converted To Pterm List.
 %
 
-sexpr_sterm_to_pterm_list(TERM,PTERMO):- is_list(TERM),append(BEFORE,[VAR],TERM),atom(VAR),
+sexpr_sterm_to_pterm_list(TD,TERM,PTERMO):- is_list(TERM),append(BEFORE,[VAR],TERM),atom(VAR),
   atom_concat('@',RVAR,VAR),non_empty_atom(RVAR),svar_fixvarname(RVAR,V),!,append(BEFORE,'$VAR'(V),PTERM),
-  sexpr_sterm_to_pterm_list0(PTERM,PTERMO).
-sexpr_sterm_to_pterm_list(TERM,PTERM):- sexpr_sterm_to_pterm_list0(TERM,PTERM).
+  sexpr_sterm_to_pterm_list0(TD,PTERM,PTERMO).
+sexpr_sterm_to_pterm_list(TD,TERM,PTERM):- sexpr_sterm_to_pterm_list0(TD,TERM,PTERM).
 
-sexpr_sterm_to_pterm_list0(VAR,VAR):-is_ftVar(VAR),!.
-sexpr_sterm_to_pterm_list0([],[]):-!.
-sexpr_sterm_to_pterm_list0([S|STERM],[P|PTERM]):-sexpr_sterm_to_pterm(S,P),sexpr_sterm_to_pterm_list0(STERM,PTERM),!.
-sexpr_sterm_to_pterm_list0(VAR,VAR).
+sexpr_sterm_to_pterm_list0(_,VAR,VAR):-is_ftVar(VAR),!.
+sexpr_sterm_to_pterm_list0(_,[],[]):-!.
+sexpr_sterm_to_pterm_list0(TD,[S|STERM],[P|PTERM]):-sexpr_sterm_to_pterm(TD,S,P),sexpr_sterm_to_pterm_list0(TD,STERM,PTERM),!.
+sexpr_sterm_to_pterm_list0(_,VAR,VAR).
 
 
 /*===================================================================
