@@ -1,3 +1,4 @@
+:- if(\+ current_module(sxpr)).
 :- module(sxpr_reader,[
   codelist_to_forms/2,
   svar_fixvarname/2,
@@ -23,7 +24,7 @@
 :- use_module(library(filestreams)).
 :- use_module(library(bugger)).
 
-%:- include('header.pro').
+%:- include('header').
 
 
 
@@ -51,7 +52,7 @@ with_lisp_translation(In,Pred1):-
    repeat,
       once(lisp_read(In,O)),
       (O== end_of_file -> (with_rest_info(Pred1),!) ; 
-      (must_det(once(maybe_notrace(call_proc(Pred1,O)))),fail)),!.
+      (must_det(once((call_proc(Pred1,O)))),fail)),!.
 with_lisp_translation(Other,Pred1):- 
    setup_call_cleanup(l_open_input(Other,In),
      with_lisp_translation(In,Pred1),
@@ -419,8 +420,8 @@ sexpr('$STRING'(S))             --> s_string(S).
 
 sexpr(E)                      --> `#`,read_dispatch(E),!.
 
-sexpr('$CHAR'(C))                 --> `#\\`,ci(`u`),remove_optional_char(`+`),dcg_basics:xinteger(C),!.
-sexpr('$CHAR'(C))                 --> `#\\`,!,rsymbol(``,C), swhite.
+sexpr('#\\'(C))                 --> `#\\`,ci(`u`),remove_optional_char(`+`),dcg_basics:xinteger(C),!.
+sexpr('#\\'(C))                 --> `#\\`,!,rsymbol(``,C), swhite.
 sexpr(['#-',K,O]) --> `#-`,sexpr(C),swhite,sexpr(O),!,{as_keyword(C,K)}.
 sexpr(['#+',K,O]) --> `#+`,sexpr(C),swhite,sexpr(O),!,{as_keyword(C,K)}.
 sexpr('$OBJ'(claz_pathname,C)) --> `#`,ci(`p`),s_string(C).
@@ -461,13 +462,14 @@ sym_or_num('$COMPLEX'(L)) --> `#C(`,!, swhite, sexpr_list(L), swhite.
 %sym_or_num((E)) --> unsigned_number(S),{number_string(E,S)}.
 sym_or_num(('1+')) --> `1+`,swhite,!.
 sym_or_num(('1-')) --> `1-`,swhite,!.
-sym_or_num((E)) --> lnumber(E),swhite,!.
 %sym_or_num((E)) --> unsigned_number(S),{number_string(E,S)}.
 sym_or_num(('#+')) --> `#+`,swhite,!.
 sym_or_num(('#-')) --> `#-`,swhite,!.
 sym_or_num(('-#+')) --> `-#+`,swhite,!.
-sym_or_num(E) --> rsymbol_maybe(``,E),!.
+sym_or_num(E) --> dcg_and2(rsymbol_maybe(``,E), \+ lnumber(_)),!.
+sym_or_num((E)) --> lnumber(E),swhite,!.
 sym_or_num('#'(E)) --> [C],{name(E,[C])}.
+
 
 sblank --> [C], {var(C)},!.
 sblank --> line_comment(S,I,CP),{assert(t_l:s_reader_info('$COMMENT'(S,I,CP)))},!, swhite.
@@ -589,7 +591,9 @@ string_vector([]) --> [], !.
 lnumber(N)--> swhite, lnumber0(N), swhite. % (peek_symbol_breaker;[]).
 
 oneof_ci(OneOf,[C])--> {member(C,OneOf)},ci([C]). 
-dcg_and2(DCG1,DCG2,S,E) :- phrase(DCG1,S,E),phrase(DCG2,S,E).
+dcg_and2(DCG1,DCG2,S,E) :- dcg_phrase(DCG1,S,E),dcg_phrase(DCG2,S,E).
+dcg_phrase(\+ DCG1,S,E):- !, \+ phrase(DCG1,S,E).
+dcg_phrase(DCG1,S,E):- phrase(DCG1,S,E).
 
 enumber(N)--> lnumber(L),!,{to_untyped(L,N)}.
 
@@ -709,9 +713,9 @@ to_untyped(Var,'$VAR'(Name)):-svar(Var,Name),!.
 to_untyped(Atom,Atom):- \+ compound(Atom),!.
 to_untyped('@'(Var),'$VAR'(Name)):-svar_fixvarname(Var,Name),!.
 to_untyped('#'(S),O):- !, (nonvar(S)->to_untyped(S,O) ; O='#'(S)).
-to_untyped('#\\'(S),C):-!,to_untyped('$CHAR'(S),C),!.
-to_untyped('$CHAR'(S),C):-to_char(S,C),!.
-to_untyped('$CHAR'(S),'$CHAR'(S)):-!.
+to_untyped('#\\'(S),C):-!,to_untyped('#\\'(S),C),!.
+to_untyped('#\\'(S),C):-to_char(S,C),!.
+to_untyped('#\\'(S),'#\\'(S)):-!.
 to_untyped('$OBJ'([FUN, F]),O):- atom(FUN),!,to_untyped('$OBJ'(FUN, F),O).
 to_untyped('$OBJ'([FUN| F]),O):- atom(FUN),!,to_untyped('$OBJ'(FUN, F),O).
 to_untyped('$OBJ'(S),'$OBJ'(O)):-to_untyped(S,O),!.
@@ -743,13 +747,13 @@ to_untyped(ExprI,ExprO):- always(ExprI=..Expr),
 to_number(S,S):-number(S),!.
 to_number(S,N):- text_to_string_safe(S,Str),number_string(N,Str),!.
 
-to_char(S,'$CHAR'(S)):- var(S),!.
+to_char(S,'#\\'(S)):- var(S),!.
 to_char(S,C):- atom(S),name(S,[N]),!,to_char(N,C).
-to_char(N,'$CHAR'(S)):- integer(N),(char_type(N,alnum)->name(S,[N]);S=N),!.
+to_char(N,'#\\'(S)):- integer(N),(char_type(N,alnum)->name(S,[N]);S=N),!.
 to_char('#'(S),C):- !, to_char(S,C).
-to_char('$CHAR'(S),C):- !, to_char(S,C).
+to_char('#\\'(S),C):- !, to_char(S,C).
 to_char(N,C):- text_to_string_safe(N,Str),char_code_from_name(Str,Code),to_char(Code,C),!.
-to_char(C,'$CHAR'(C)).
+to_char(C,'#\\'(C)).
 
 char_code_from_name(Str,Code):-find_from_name(Str,Code),!.
 char_code_from_name(Str,Code):-text_upper(Str,StrU),find_from_name2(StrU,Code).
@@ -985,7 +989,7 @@ track_stream(In,G):-
         nop(set_stream(In,encoding(octet))),
         (ignore(notrace_catch_fail(line_count(In,Line),_,(Line = -1))),
          b_setval('$lisp_translation_line',Line-Chars),
-           (maybe_notrace(G),!)),
+           ((G),!)),
         Catcher,
         true)->true;Catcher=fail),
      track_stream_cleanup(Catcher,In,Was,Pos).
@@ -1382,4 +1386,5 @@ writeqnl(O):-writeq(O),nl.
 
 
 :- fixup_exports.
+:- endif.
 
