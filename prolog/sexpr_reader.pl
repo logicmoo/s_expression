@@ -89,7 +89,7 @@ make_tmpfile_name(Name,Temp):-
   atomic_list_concat(List1,'/',Name),atomic_list_concat(List1,'_',Temp1),
   atomic_list_concat(List2,'.',Temp1),atomic_list_concat(List2,'_',Temp2),
   atomic_list_concat(List3,'\\',Temp2),atomic_list_concat(List3,'_',Temp3),
-  atom_concat_or_rtrace(Temp3,'.tmp',Temp),!.
+  atom_concat(Temp3,'.tmp',Temp),!.
   
 
 
@@ -853,7 +853,7 @@ to_unbackquote(I,O):-to_untyped(I,O),!.
 
 
 %atom_or_string(X):- (atom(X);string(X)),!.
-as_keyword(C,K):- atom(C),!,(atom_concat_or_rtrace(':',_,C)->K=C;atom_concat_or_rtrace(':',C,K)),!.
+as_keyword(C,K):- atom(C),!,(atom_concat(':',_,C)->K=C;atom_concat(':',C,K)),!.
 as_keyword(C,C):- \+compound(C),!.
 as_keyword([A|B],[AK|BK]):- !, as_keyword(A,AK),as_keyword(B,BK),!.
 as_keyword(C,C).
@@ -870,8 +870,8 @@ to_untyped('#-'(C,I),'#-'(K,O)):- as_keyword(C,K),!,to_untyped(I,O),!.
 to_untyped('#+'(C,I),'#+'(K,O)):- as_keyword(C,K),!,to_untyped(I,O),!.
 to_untyped('?'(S),_):- S=='??',!.
 % to_untyped('?'(S),'$VAR'('_')):- S=='??',!.
-% to_untyped(VAR,NameU):-atom(VAR),atom_concat_or_rtrace('#$',NameU,VAR),!.
-to_untyped(VAR,NameU):-atom(VAR),(atom_concat_or_rtrace(N,'.',VAR)->true;N=VAR),(notrace_catch_fail(atom_number(N,NameU))),!.
+% to_untyped(VAR,NameU):-atom(VAR),atom_concat('#$',NameU,VAR),!.
+to_untyped(VAR,NameU):-atom(VAR),(atom_concat(N,'.',VAR)->true;N=VAR),(notrace_catch_fail(atom_number(N,NameU))),!.
 %to_untyped(S,s(L)):- string(S),atom_contains(S,' '),atomic_list_concat(['(',S,')'],O),parse_sexpr_string(O,L),!.
 to_untyped(S,S):- string(S),!.
 to_untyped(S,S):- number(S),!.
@@ -909,7 +909,7 @@ to_untyped(['#'(Backquote),Rest],Out):- Backquote == backquote, !,to_untyped(['#
 to_untyped(['#'(S)|Rest],OOut):- nonvar(S), is_list(Rest),must_maplist(to_untyped,[S|Rest],[F|Mid]), 
           ((atom(F),t_l:s2p(F))-> Out=..[F|Mid];Out=[F|Mid]),
           to_untyped(Out,OOut).
-to_untyped(ExprI,ExprO):- ExprI=..[F|Expr],atom_concat_or_rtrace('$',_,F),must_maplist(to_untyped,Expr,TT),ExprO=..[F|TT].
+to_untyped(ExprI,ExprO):- ExprI=..[F|Expr],atom_concat('$',_,F),must_maplist(to_untyped,Expr,TT),ExprO=..[F|TT].
 
 % to_untyped([H|T],Forms):-is_list([H|T]),always(text_to_string_safe([H|T],Forms);maplist(to_untyped,[H|T],Forms)).
 to_untyped([H|T],[HH|TT]):-!,always((to_untyped(H,HH),to_untyped(T,TT))).
@@ -1009,7 +1009,7 @@ lisp_code_name_extra(13,`Ret`).
 
 % @TODO undo this temp speedup
 :- set_prolog_flag(all_lisp_char_names,false).
-:- use_module('chars.data').
+:- use_module('./chars').
 /*
 
 (with-open-file (strm "lisp_code_names.pl" :direction :output :if-exists :supersede :if-does-not-exist :create)
@@ -1055,7 +1055,7 @@ copy_lvars([],Vars,[],Vars).
 copy_lvars(Term,Vars,Term,Vars):- \+compound(Term),!.
 copy_lvars('?'(Inner),Vars,Out,NVars):- !,
     copy_lvars((Inner),Vars,(NInner),NVars),
-    (atom(NInner) -> atom_concat_or_rtrace('?',NInner,Out) ; Out = '?'(NInner)),!.
+    (atom(NInner) -> atom_concat('?',NInner,Out) ; Out = '?'(NInner)),!.
 
 copy_lvars([H|T],Vars,[NH|NT],NVars):- !, copy_lvars(H,Vars,NH,SVars), copy_lvars(T,SVars,NT,NVars).
 copy_lvars(Term,Vars,NTerm,NVars):-    
@@ -1080,9 +1080,9 @@ svar('$VAR'(Var),Name):-number(Var),Var > -1, !, always(format(atom(Name),'~w',[
 svar('$VAR'(Name),VarName):-!,always(svar_fixvarname(Name,VarName)).
 svar('?'(Name),NameU):-svar_fixvarname(Name,NameU),!.
 svar('@'(Name),NameU):-svar_fixvarname(Name,NameU),!.
-% svar(VAR,Name):-atom(VAR),atom_concat_or_rtrace('_',_,VAR),svar_fixvarname(VAR,Name),!.
-svar(VAR,Name):-atom(VAR),atom_concat_or_rtrace('@',A,VAR),non_empty_atom(A),svar_fixvarname(VAR,Name),!.
-svar(VAR,Name):-atom(VAR),atom_concat_or_rtrace('?',A,VAR),non_empty_atom(A),svar_fixvarname(VAR,Name),!.
+% svar(VAR,Name):-atom(VAR),atom_concat('_',_,VAR),svar_fixvarname(VAR,Name),!.
+svar(VAR,Name):-atom(VAR),atom_concat('@',A,VAR),non_empty_atom(A),svar_fixvarname(VAR,Name),!.
+svar(VAR,Name):-atom(VAR),atom_concat('?',A,VAR),non_empty_atom(A),svar_fixvarname(VAR,Name),!.
 
 
 :- export(svar_fixvarname/2).
@@ -1104,11 +1104,11 @@ svar_fixname('@'(Name),UP):- !,svar_fixvarname(Name,UP).
 svar_fixname('?'(Name),UP):- !,svar_fixvarname(Name,UP).
 svar_fixname(SVAR,SVARO):- ok_var_name(SVAR),!,SVARO=SVAR.
 svar_fixname('??','_'):-!.
-svar_fixname(QA,AU):-atom_concat_or_rtrace('??',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO),atom_concat_or_rtrace('_',AO,AU).
-svar_fixname(QA,AO):-atom_concat_or_rtrace('?',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO).
-svar_fixname(QA,AO):-atom_concat_or_rtrace('@',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO).
-svar_fixname(NameU,NameU):-atom_concat_or_rtrace('_',Name,NameU),non_empty_atom(Name),atom_number(Name,_),!.
-svar_fixname(NameU,NameUO):-atom_concat_or_rtrace('_',Name,NameU),non_empty_atom(Name), \+ atom_number(Name,_),!,svar_fixvarname(Name,NameO),atom_concat_or_rtrace('_',NameO,NameUO).
+svar_fixname(QA,AU):-atom_concat('??',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO),atom_concat('_',AO,AU).
+svar_fixname(QA,AO):-atom_concat('?',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO).
+svar_fixname(QA,AO):-atom_concat('@',A,QA),non_empty_atom(A),!,svar_fixvarname(A,AO).
+svar_fixname(NameU,NameU):-atom_concat('_',Name,NameU),non_empty_atom(Name),atom_number(Name,_),!.
+svar_fixname(NameU,NameUO):-atom_concat('_',Name,NameU),non_empty_atom(Name), \+ atom_number(Name,_),!,svar_fixvarname(Name,NameO),atom_concat('_',NameO,NameUO).
 svar_fixname(I,O):-  
  always((
   fix_varcase(I,M0),
@@ -1124,7 +1124,7 @@ svar_fixname(I,O):-
 %                                                               
 % Fix Varcase.
 %
-fix_varcase(Word,Word):- atom_concat_or_rtrace('_',_,Word),!.
+fix_varcase(Word,Word):- atom_concat('_',_,Word),!.
 fix_varcase(Word,WordC):- !, atom_codes(Word,[F|R]),to_upper(F,U),atom_codes(WordC,[U|R]).
 % the cut above stops the rest 
 fix_varcase(Word,Word):-upcase_atom(Word,UC),UC=Word,!.
@@ -1415,7 +1415,7 @@ next_args_are_lists_unless_string(defun,1).
 next_args_are_lists_unless_string(let,0).
 next_args_are_lists_unless_string('let*',0).
 
-%sexpr_sterm_to_pterm(TD,[S|TERM],PTERM):- (number(S);  (atom(S),fail,atom_concat_or_rtrace(_,'Fn',S))),sexpr_sterm_to_pterm_list(TD,[S|TERM],PTERM),!.            
+%sexpr_sterm_to_pterm(TD,[S|TERM],PTERM):- (number(S);  (atom(S),fail,atom_concat(_,'Fn',S))),sexpr_sterm_to_pterm_list(TD,[S|TERM],PTERM),!.            
 %sexpr_sterm_to_pterm(TD,[S],O):- is_ftVar(S),sexpr_sterm_to_pterm(TD,S,Y),!,s_univ(TD,O,[Y]),!.
 %sexpr_sterm_to_pterm(TD,[S],O):- nonvar(S),sexpr_sterm_to_pterm(TD,S,Y),!,s_univ(TD,O,[Y]),!.
 %sexpr_sterm_to_pterm(TD,[S|TERM],PTERM):- is_ftVar(S), sexpr_sterm_to_pterm_list(TD,TERM,PLIST),s_univ(TD,PTERM,[t,S|PLIST]),!.
@@ -1445,7 +1445,7 @@ l_arity(_,1).
 %
 
 sexpr_sterm_to_pterm_list(TD,TERM,PTERMO):- is_list(TERM),append(BEFORE,[VAR],TERM),atom(VAR),
-  atom_concat_or_rtrace('@',RVAR,VAR),non_empty_atom(RVAR),svar_fixvarname(RVAR,V),!,append(BEFORE,'$VAR'(V),PTERM),
+  atom_concat('@',RVAR,VAR),non_empty_atom(RVAR),svar_fixvarname(RVAR,V),!,append(BEFORE,'$VAR'(V),PTERM),
   sexpr_sterm_to_pterm_list0(TD,PTERM,PTERMO).
 sexpr_sterm_to_pterm_list(TD,TERM,PTERM):- sexpr_sterm_to_pterm_list0(TD,TERM,PTERM).
 
